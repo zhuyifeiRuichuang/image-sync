@@ -1,0 +1,451 @@
+name: 🔄 容器镜像同步
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+  packages: write
+
+jobs:
+  sync-image:
+    # 仅处理带有 image-sync 标签的 Issue
+    if: contains(github.event.issue.labels.*.name, 'image-sync')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # ============================================
+      # 步骤1：解析 Issue 内容
+      # ============================================
+      - name: 📝 解析 Issue 内容
+        id: parse-issue
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          echo "=========================================="
+          echo "📝 解析 Issue 内容"
+          echo "=========================================="
+
+          # 从 Issue body 中提取镜像名称
+          IMAGE_NAME=$(echo "${ISSUE_BODY}" | \
+            sed -n '/### 镜像名称/,/###/p' | \
+            grep -v '###' | \
+            sed '/^$/d' | \
+            head -n1 | \
+            xargs)
+
+          # 从 Issue body 中提取镜像 Tag
+          IMAGE_TAG=$(echo "${ISSUE_BODY}" | \
+            sed -n '/### 镜像 Tag/,/###/p' | \
+            grep -v '###' | \
+            sed '/^$/d' | \
+            head -n1 | \
+            xargs)
+
+          # 从 Issue body 中提取源仓库
+          SOURCE_REGISTRY=$(echo "${ISSUE_BODY}" | \
+            sed -n '/### 源镜像仓库/,/###/p' | \
+            grep -v '###' | \
+            sed '/^$/d' | \
+            head -n1 | \
+            xargs)
+
+          # 默认值处理
+          if [ -z "${IMAGE_TAG}" ]; then
+            IMAGE_TAG="latest"
+          fi
+          if [ -z "${SOURCE_REGISTRY}" ] || [ "${SOURCE_REGISTRY}" = "_No response_" ]; then
+            SOURCE_REGISTRY="docker.io"
+          fi
+
+          # 处理下拉选项，提取仓库地址
+          case "${SOURCE_REGISTRY}" in
+            *"docker.io"*|*"Docker Hub"*)
+              SOURCE_REGISTRY="docker.io"
+              ;;
+            *"quay.io"*)
+              SOURCE_REGISTRY="quay.io"
+              ;;
+            *"gcr.io"*)
+              SOURCE_REGISTRY="gcr.io"
+              ;;
+            *"k8s.gcr.io"*)
+              SOURCE_REGISTRY="k8s.gcr.io"
+              ;;
+            *"registry.k8s.io"*)
+              SOURCE_REGISTRY="registry.k8s.io"
+              ;;
+            *"ghcr.io"*)
+              SOURCE_REGISTRY="ghcr.io"
+              ;;
+            *"其他"*)
+              # 使用镜像名称中包含的仓库地址
+              SOURCE_REGISTRY="embedded"
+              ;;
+          esac
+
+          echo "解析结果:"
+          echo "  镜像名称: ${IMAGE_NAME}"
+          echo "  镜像Tag: ${IMAGE_TAG}"
+          echo "  源仓库: ${SOURCE_REGISTRY}"
+
+          # 输出到 GitHub Actions 环境变量
+          echo "image_name=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "source_registry=${SOURCE_REGISTRY}" >> "$GITHUB_OUTPUT"
+
+          if [ -z "${IMAGE_NAME}" ]; then
+            echo "❌ 无法从 Issue 中解析出镜像名称"
+            echo "parse_error=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "parse_error=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ============================================
+      # 步骤2：检查仓库配置
+      # ============================================
+      - name: 🔍 检查目标镜像仓库配置
+        id: check-config
+        run: |
+          echo "=========================================="
+          echo "🔍 检查目标镜像仓库配置"
+          echo "=========================================="
+
+          REGISTRY_TYPE="${REGISTRY_TYPE:-}"
+          REGISTRY_URL="${REGISTRY_URL:-}"
+          REGISTRY_NAMESPACE="${REGISTRY_NAMESPACE:-}"
+          REGISTRY_USERNAME="${REGISTRY_USERNAME:-}"
+          HAS_REGISTRY_PASSWORD="${HAS_REGISTRY:-false}"
+
+          echo "配置检查结果:"
+          echo "  REGISTRY_TYPE: ${REGISTRY_TYPE}"
+          echo "  REGISTRY_URL: ${REGISTRY_URL}"
+          echo "  REGISTRY_NAMESPACE: ${REGISTRY_NAMESPACE}"
+          echo "  REGISTRY_USERNAME: 已配置=${REGISTRY_USERNAME:+是}"
+          echo "  REGISTRY_PASSWORD: 已配置=${HAS_REGISTRY_PASSWORD}"
+
+          CONFIG_OK="true"
+          MISSING_CONFIG=""
+
+          if [ -z "${REGISTRY_TYPE}" ]; then
+            CONFIG_OK="false"
+            MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_TYPE"
+          fi
+
+          if [ -z "${REGISTRY_USERNAME}" ]; then
+            CONFIG_OK="false"
+            MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_USERNAME"
+          fi
+
+          # REGISTRY_PASSWORD 是 Secret，无法直接读取值，但可以通过尝试登录来验证
+          # 这里我们假设如果 Secret 存在就会传入，通过 HAS_REGISTRY 环境变量标记
+
+          # 根据仓库类型确定默认 URL 和是否需要 namespace
+          case "${REGISTRY_TYPE}" in
+            dockerhub)
+              if [ -z "${REGISTRY_URL}" ]; then
+                REGISTRY_URL="docker.io"
+              fi
+              # Docker Hub 的 namespace 默认为用户名
+              if [ -z "${REGISTRY_NAMESPACE}" ]; then
+                REGISTRY_NAMESPACE="${REGISTRY_USERNAME}"
+              fi
+              ;;
+            ghcr)
+              if [ -z "${REGISTRY_URL}" ]; then
+                REGISTRY_URL="ghcr.io"
+              fi
+              # GHCR 的 namespace 默认为 GitHub 用户名/组织名
+              if [ -z "${REGISTRY_NAMESPACE}" ]; then
+                REGISTRY_NAMESPACE="${GHCR_NAMESPACE:-}"
+              fi
+              ;;
+            quay)
+              if [ -z "${REGISTRY_URL}" ]; then
+                REGISTRY_URL="quay.io"
+              fi
+              ;;
+            tencent)
+              if [ -z "${REGISTRY_URL}" ]; then
+                REGISTRY_URL="ccr.ccs.tencentyun.com"
+              fi
+              if [ -z "${REGISTRY_NAMESPACE}" ]; then
+                CONFIG_OK="false"
+                MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_NAMESPACE(腾讯云必填)"
+              fi
+              ;;
+            huawei)
+              if [ -z "${REGISTRY_URL}" ]; then
+                REGISTRY_URL="swr.cn-north-4.myhuaweicloud.com"
+              fi
+              if [ -z "${REGISTRY_NAMESPACE}" ]; then
+                CONFIG_OK="false"
+                MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_NAMESPACE(华为云必填)"
+              fi
+              ;;
+            aliyun)
+              if [ -z "${REGISTRY_URL}" ]; then
+                REGISTRY_URL="registry.cn-hangzhou.aliyuncs.com"
+              fi
+              if [ -z "${REGISTRY_NAMESPACE}" ]; then
+                CONFIG_OK="false"
+                MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_NAMESPACE(阿里云必填)"
+              fi
+              ;;
+            private)
+              if [ -z "${REGISTRY_URL}" ]; then
+                CONFIG_OK="false"
+                MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_URL(私有仓库必填)"
+              fi
+              ;;
+            *)
+              CONFIG_OK="false"
+              MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_TYPE(无效类型: ${REGISTRY_TYPE})"
+              ;;
+          esac
+
+          echo "config_ok=${CONFIG_OK}" >> "$GITHUB_OUTPUT"
+          echo "registry_url=${REGISTRY_URL}" >> "$GITHUB_OUTPUT"
+          echo "registry_namespace=${REGISTRY_NAMESPACE}" >> "$GITHUB_OUTPUT"
+          echo "missing_config=${MISSING_CONFIG}" >> "$GITHUB_OUTPUT"
+
+          if [ "${CONFIG_OK}" = "true" ]; then
+            echo "✅ 仓库配置完整"
+            echo "  目标仓库: ${REGISTRY_URL}"
+            echo "  目标命名空间: ${REGISTRY_NAMESPACE}"
+          else
+            echo "❌ 仓库配置不完整，缺少: ${MISSING_CONFIG}"
+          fi
+        env:
+          REGISTRY_TYPE: ${{ vars.REGISTRY_TYPE }}
+          REGISTRY_URL: ${{ vars.REGISTRY_URL }}
+          REGISTRY_NAMESPACE: ${{ vars.REGISTRY_NAMESPACE }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          HAS_REGISTRY: ${{ secrets.REGISTRY_PASSWORD != '' }}
+          GHCR_NAMESPACE: ${{ vars.GHCR_NAMESPACE }}
+
+      # ============================================
+      # 步骤3：配置不完整时评论并关闭 Issue
+      # ============================================
+      - name: 💬 配置不完整 - 评论反馈
+        if: steps.check-config.outputs.config_ok != 'true' || steps.parse-issue.outputs.parse_error == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const parseError = '${{ steps.parse-issue.outputs.parse_error }}';
+            const configOk = '${{ steps.check-config.outputs.config_ok }}';
+            const missingConfig = '${{ steps.check-config.outputs.missing_config }}';
+
+            let commentBody = '';
+
+            if (parseError === 'true') {
+              commentBody = `## ❌ 无法解析镜像信息\n\n` +
+                `无法从 Issue 中解析出镜像名称。请确认 Issue 使用了正确的模板格式。\n\n` +
+                `---\n*由 [image-sync](https://github.com/${context.repo.owner}/${context.repo.repo}) Action 自动反馈*`;
+            } else if (configOk !== 'true') {
+              commentBody = `## ❌ 未配置目标容器镜像仓库\n\n` +
+                `当前仓库未完整配置目标容器镜像仓库，无法同步镜像。\n\n` +
+                `### 缺少的配置项\n\n` +
+                missingConfig.split(' ').filter(s => s).map(item => `- \`${item}\``).join('\n') + '\n\n' +
+                `### 配置方法\n\n` +
+                `请在本 GitHub 仓库中配置以下 Variables 和 Secrets：\n\n` +
+                `| 配置项 | 类型 | 说明 |\n` +
+                `|--------|------|------|\n` +
+                `| \`REGISTRY_TYPE\` | Variable | 仓库类型：dockerhub / ghcr / quay / tencent / huawei / aliyun / private |\n` +
+                `| \`REGISTRY_URL\` | Variable | 仓库地址（私有仓库必填，其他类型有默认值） |\n` +
+                `| \`REGISTRY_NAMESPACE\` | Variable | 命名空间（腾讯云/华为云/阿里云必填） |\n` +
+                `| \`REGISTRY_USERNAME\` | Secret | 仓库用户名 |\n` +
+                `| \`REGISTRY_PASSWORD\` | Secret | 仓库密码或访问Token |\n\n` +
+                `配置路径：仓库 Settings → Secrets and variables → Actions\n\n` +
+                `---\n*由 [image-sync](https://github.com/${context.repo.owner}/${context.repo.repo}) Action 自动反馈*`;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
+
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed',
+              labels: ['image-sync-failed']
+            });
+
+      # ============================================
+      # 步骤4：安装 skopeo
+      # ============================================
+      - name: 📦 安装 skopeo
+        if: steps.check-config.outputs.config_ok == 'true' && steps.parse-issue.outputs.parse_error != 'true'
+        run: |
+          echo "📦 安装 skopeo 工具..."
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+          echo "✅ skopeo 安装完成"
+          skopeo --version
+
+      # ============================================
+      # 步骤5：同步镜像
+      # ============================================
+      - name: 🔄 同步容器镜像
+        id: sync
+        if: steps.check-config.outputs.config_ok == 'true' && steps.parse-issue.outputs.parse_error != 'true'
+        run: |
+          echo "🚀 开始同步镜像..."
+
+          chmod +x scripts/sync-image.sh
+
+          # 运行同步脚本并捕获输出
+          SYNC_OUTPUT=$(bash scripts/sync-image.sh \
+            "${{ steps.parse-issue.outputs.image_name }}" \
+            "${{ steps.parse-issue.outputs.image_tag }}" \
+            "${{ steps.parse-issue.outputs.source_registry }}" \
+            "${{ steps.check-config.outputs.registry_url }}" \
+            "${{ steps.check-config.outputs.registry_namespace }}" \
+            "${{ secrets.REGISTRY_USERNAME }}" \
+            "${{ secrets.REGISTRY_PASSWORD }}" \
+            "amd64 arm64" 2>&1) || true
+
+          echo "${SYNC_OUTPUT}"
+
+          # 提取关键信息
+          SYNC_STATUS=$(echo "${SYNC_OUTPUT}" | grep "^SYNC_STATUS=" | cut -d= -f2 || echo "unknown")
+          SOURCE_IMAGE=$(echo "${SYNC_OUTPUT}" | grep "^SOURCE_IMAGE=" | cut -d= -f2 || echo "")
+          TARGET_IMAGE=$(echo "${SYNC_OUTPUT}" | grep "^TARGET_IMAGE=" | cut -d= -f2 || echo "")
+          AVAILABLE_ARCHS=$(echo "${SYNC_OUTPUT}" | grep "^AVAILABLE_ARCHS=" | cut -d= -f2 || echo "")
+          TARGET_ARCHS=$(echo "${SYNC_OUTPUT}" | grep "^TARGET_ARCHS=" | cut -d= -f2 || echo "")
+          ERROR_DETAIL=$(echo "${SYNC_OUTPUT}" | grep "^ERROR_DETAIL=" | cut -d= -f2 || echo "")
+
+          echo "sync_status=${SYNC_STATUS}" >> "$GITHUB_OUTPUT"
+          echo "source_image=${SOURCE_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "target_image=${TARGET_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "available_archs=${AVAILABLE_ARCHS}" >> "$GITHUB_OUTPUT"
+          echo "target_archs=${TARGET_ARCHS}" >> "$GITHUB_OUTPUT"
+          echo "error_detail=${ERROR_DETAIL}" >> "$GITHUB_OUTPUT"
+
+      # ============================================
+      # 步骤6：评论反馈同步结果
+      # ============================================
+      - name: 💬 同步成功 - 评论反馈
+        if: steps.sync.outputs.sync_status == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sourceImage = '${{ steps.sync.outputs.source_image }}';
+            const targetImage = '${{ steps.sync.outputs.target_image }}';
+            const availableArchs = '${{ steps.sync.outputs.available_archs }}';
+            const targetArchs = '${{ steps.sync.outputs.target_archs }}';
+            const imageName = '${{ steps.parse-issue.outputs.image_name }}';
+            const imageTag = '${{ steps.parse-issue.outputs.image_tag }}';
+            const registryType = '${{ vars.REGISTRY_TYPE }}';
+            const registryUrl = '${{ steps.check-config.outputs.registry_url }}';
+            const registryNamespace = '${{ steps.check-config.outputs.registry_namespace }}';
+
+            let archsDisplay = '';
+            if (targetArchs && targetArchs !== 'unknown') {
+              const archs = targetArchs.split(' ');
+              archsDisplay = archs.map(a => {
+                if (a === 'amd64') return `✅ amd64 (x86_64)`;
+                if (a === 'arm64') return `✅ arm64 (aarch64)`;
+                return `✅ ${a}`;
+              }).join('\n');
+            } else {
+              archsDisplay = '✅ 多架构 manifest 已同步';
+            }
+
+            // 检查是否有缺失的架构
+            let missingArchsInfo = '';
+            const expectedArchs = ['amd64', 'arm64'];
+            if (targetArchs && targetArchs !== 'unknown') {
+              const syncedArchs = targetArchs.split(' ');
+              const missing = expectedArchs.filter(a => !syncedArchs.includes(a));
+              if (missing.length > 0) {
+                missingArchsInfo = '\n\n### ⚠️ 未同步架构\n\n' +
+                  missing.map(a => `❌ ${a}（源镜像不支持该架构）`).join('\n');
+              }
+            }
+
+            const commentBody = `## ✅ 容器镜像同步成功\n\n` +
+              `### 镜像信息\n\n` +
+              `| 项目 | 值 |\n` +
+              `|------|----|\n` +
+              `| 原始镜像 | \`${sourceImage}\` |\n` +
+              `| 同步后镜像 | \`${targetImage}\` |\n` +
+              `| 仓库类型 | ${registryType} |\n` +
+              `| 目标仓库 | ${registryUrl} |\n` +
+              `| 目标命名空间 | ${registryNamespace} |\n\n` +
+              `### 已同步架构\n\n${archsDisplay}${missingArchsInfo}\n\n` +
+              `### 使用方法\n\n` +
+              `\`\`\`bash\n` +
+              `docker pull ${targetImage}\n` +
+              `\`\`\`\n\n` +
+              `---\n*由 [image-sync](https://github.com/${context.repo.owner}/${context.repo.repo}) Action 自动反馈*`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
+
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed',
+              labels: ['image-sync-success']
+            });
+
+      # ============================================
+      # 步骤7：同步失败 - 评论反馈
+      # ============================================
+      - name: 💬 同步失败 - 评论反馈
+        if: steps.sync.outputs.sync_status != 'success' && steps.sync.outputs.sync_status != '' && steps.check-config.outputs.config_ok == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sourceImage = '${{ steps.sync.outputs.source_image }}';
+            const targetImage = '${{ steps.sync.outputs.target_image }}';
+            const errorDetail = '${{ steps.sync.outputs.error_detail }}';
+            const imageName = '${{ steps.parse-issue.outputs.image_name }}';
+            const imageTag = '${{ steps.parse-issue.outputs.image_tag }}';
+
+            let errorInfo = '';
+            if (errorDetail) {
+              errorInfo = `\n\n### 错误详情\n\n\`\`\`\n${errorDetail}\n\`\`\``;
+            }
+
+            const commentBody = `## ❌ 容器镜像同步失败\n\n` +
+              `### 镜像信息\n\n` +
+              `| 项目 | 值 |\n` +
+              `|------|----|\n` +
+              `| 镜像名称 | \`${imageName}\` |\n` +
+              `| 镜像Tag | \`${imageTag}\` |\n` +
+              `| 完整引用 | \`${sourceImage || imageName + ':' + imageTag}\` |\n` +
+              `| 目标镜像 | \`${targetImage || '未生成'}\` |${errorInfo}\n\n` +
+              `### 可能的原因\n\n` +
+              `- 源镜像不存在或为私有镜像\n` +
+              `- 目标仓库认证失败\n` +
+              `- 网络连接问题\n\n` +
+              `请检查以上信息后重新提交 Issue。\n\n` +
+              `---\n*由 [image-sync](https://github.com/${context.repo.owner}/${context.repo.repo}) Action 自动反馈*`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: commentBody
+            });
+
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              state: 'open',
+              labels: ['image-sync-failed']
+            });

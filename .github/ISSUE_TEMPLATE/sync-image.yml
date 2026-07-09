@@ -1,0 +1,50 @@
+name: 🔄 容器镜像同步请求
+description: 提交容器镜像名称和Tag，自动同步到已配置的镜像仓库
+labels: ["image-sync"]
+body:
+  - type: input
+    id: image-name
+    attributes:
+      label: 镜像名称
+      description: >-
+        要同步的容器镜像名称。
+        对于 Docker Hub 官方镜像填写名称即可（如 mysql），
+        对于带命名空间的镜像填写完整路径（如 nginxinc/nginx-prometheus-exporter），
+        对于非 Docker Hub 的镜像填写完整地址（如 quay.io/prometheus/node-exporter）。
+      placeholder: mysql
+    validations:
+      required: true
+
+  - type: input
+    id: image-tag
+    attributes:
+      label: 镜像 Tag
+      description: 要同步的镜像版本标签，如不填写则默认为 latest
+      placeholder: "8.4.10"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: source-registry
+    attributes:
+      label: 源镜像仓库
+      description: 选择镜像来源仓库（当镜像名称中已包含完整仓库地址时，此项可忽略）
+      options:
+        - docker.io（Docker Hub 默认）
+        - quay.io
+        - gcr.io（Google Container Registry）
+        - k8s.gcr.io（Kubernetes Container Registry）
+        - registry.k8s.io
+        - ghcr.io（GitHub Container Registry）
+        - 其他（请在镜像名称中填写完整地址）
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-info
+    attributes:
+      label: 补充说明
+      description: 如有其他需要说明的信息（如源仓库为私有仓库、需要指定特定架构等），请在此填写
+      placeholder: 可选填写
+    validations:
+      required: false
