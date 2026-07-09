@@ -108,14 +108,14 @@ get_readable_target() {
 
 # --- 登录目标仓库 ---
 login_target_registry() {
-  echo "🔐 正在登录目标镜像仓库: ${TARGET_REGISTRY}"
+  log "🔐 正在登录目标镜像仓库: ${TARGET_REGISTRY}"
 
   if echo "${TARGET_PASSWORD}" | skopeo login "${TARGET_REGISTRY}" \
     -u "${TARGET_USERNAME}" --password-stdin \
     --tls-verify=true 2>&1; then
-    echo "✅ 登录成功"
+    log "✅ 登录成功"
   else
-    echo "❌ 登录失败，请检查 REGISTRY_USERNAME 和 REGISTRY_PASSWORD 配置"
+    log "❌ 登录失败，请检查 REGISTRY_USERNAME 和 REGISTRY_PASSWORD 配置"
     return 1
   fi
 }
@@ -125,17 +125,17 @@ inspect_source_image() {
   local source_ref
   source_ref=$(construct_source_ref)
 
-  echo "🔍 正在检查源镜像: ${source_ref#docker://}"
+  log "🔍 正在检查源镜像: ${source_ref#docker://}"
 
   # 尝试 inspect 源镜像
   local inspect_output
   if ! inspect_output=$(skopeo inspect --raw "${source_ref}" 2>&1); then
-    echo "❌ 源镜像不存在或无法访问: ${source_ref#docker://}"
+    log "❌ 源镜像不存在或无法访问: ${source_ref#docker://}"
     echo "ERROR_DETAIL: ${inspect_output}"
     return 1
   fi
 
-  echo "✅ 源镜像存在"
+  log "✅ 源镜像存在"
 
   # 解析架构信息
   local available_archs=""
@@ -176,8 +176,58 @@ print(' '.join(archs))
     available_archs="unknown"
   fi
 
-  echo "📋 源镜像可用架构: ${available_archs}"
+  log "📋 源镜像可用架构: ${available_archs}"
   echo "AVAILABLE_ARCHS=${available_archs}"
+}
+
+# --- 工具函数：打印带时间戳的日志 ---
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
+
+# --- 运行命令并带进度心跳 ---
+# 在后台运行命令，每 30 秒打印一次心跳，避免日志长时间无输出被 GitHub Actions 误判卡死
+run_with_heartbeat() {
+  local cmd="$1"
+  local desc="$2"
+  local start_time end_time elapsed
+  start_time=$(date +%s)
+
+  log "⏳ ${desc} 开始..."
+  log "   命令: ${cmd}"
+
+  # 使用临时文件捕获输出
+  local tmp_output
+  tmp_output=$(mktemp)
+
+  # 后台执行命令，将输出重定向到临时文件
+  eval "${cmd}" > "${tmp_output}" 2>&1 &
+  local cmd_pid=$!
+
+  # 进度心跳
+  while kill -0 "${cmd_pid}" 2>/dev/null; do
+    elapsed=$(($(date +%s) - start_time))
+    log "⏳ ${desc} 进行中... 已耗时 ${elapsed} 秒"
+    sleep 30
+  done
+
+  # 等待命令结束并获取退出码
+  wait "${cmd_pid}"
+  local exit_code=$?
+
+  end_time=$(date +%s)
+  elapsed=$((end_time - start_time))
+
+  # 打印完整输出
+  echo ""
+  echo "--- ${desc} 详细输出 (耗时 ${elapsed} 秒) ---"
+  cat "${tmp_output}"
+  echo "--- ${desc} 输出结束 ---"
+  echo ""
+
+  rm -f "${tmp_output}"
+
+  return ${exit_code}
 }
 
 # --- 同步镜像（支持多架构） ---
@@ -187,44 +237,56 @@ sync_image() {
   local target_ref
   target_ref=$(construct_target_ref)
 
-  echo "🔄 开始同步镜像"
-  echo "   源: ${source_ref#docker://}"
-  echo "   目标: ${target_ref#docker://}"
-  echo "   架构: ${ARCHITECTURES}"
+  log "🔄 开始同步镜像"
+  log "   源: ${source_ref#docker://}"
+  log "   目标: ${target_ref#docker://}"
+  log "   架构: ${ARCHITECTURES}"
 
   local sync_success=true
   local synced_archs=""
   local failed_archs=""
 
+  # 先获取镜像大小信息，帮助预估时间
+  log "📊 正在获取源镜像信息..."
+  local image_info
+  image_info=$(skopeo inspect "${source_ref}" 2>/dev/null || echo "")
+  if [ -n "${image_info}" ]; then
+    local layers_count
+    layers_count=$(echo "${image_info}" | python3 -c "import sys, json; d=json.load(sys.stdin); print(len(d.get('Layers', [])))" 2>/dev/null || echo "unknown")
+    log "📋 源镜像层数: ${layers_count}"
+  fi
+
   # 先尝试用 --all 同步整个 manifest list（多架构）
   echo ""
-  echo "📦 尝试同步多架构 manifest list..."
+  log "📦 尝试同步多架构 manifest list..."
 
-  if skopeo copy --all \
-    --retry-times 3 \
+  local copy_cmd
+  copy_cmd="skopeo copy --all --verbose --retry-times 3 \
     --src-tls-verify=true \
     --dest-tls-verify=true \
-    "${source_ref}" "${target_ref}" 2>&1; then
-    echo "✅ 多架构 manifest list 同步成功"
+    '${source_ref}' '${target_ref}'"
+
+  if run_with_heartbeat "${copy_cmd}" "同步多架构 manifest list"; then
+    log "✅ 多架构 manifest list 同步成功"
     synced_archs="${ARCHITECTURES}"
   else
-    echo "⚠️ 多架构 manifest list 同步失败，尝试逐架构同步..."
+    log "⚠️ 多架构 manifest list 同步失败，尝试逐架构同步..."
 
     # 逐架构同步
     for arch in ${ARCHITECTURES}; do
       echo ""
-      echo "📦 同步架构: ${arch}"
+      log "📦 同步架构: ${arch}"
 
-      if skopeo copy \
-        --override-arch "${arch}" \
-        --retry-times 3 \
+      copy_cmd="skopeo copy --override-arch '${arch}' --verbose --retry-times 3 \
         --src-tls-verify=true \
         --dest-tls-verify=true \
-        "${source_ref}" "${target_ref}" 2>&1; then
-        echo "✅ 架构 ${arch} 同步成功"
+        '${source_ref}' '${target_ref}'"
+
+      if run_with_heartbeat "${copy_cmd}" "同步架构 ${arch}"; then
+        log "✅ 架构 ${arch} 同步成功"
         synced_archs="${synced_archs} ${arch}"
       else
-        echo "⚠️ 架构 ${arch} 同步失败，源镜像可能不支持该架构"
+        log "⚠️ 架构 ${arch} 同步失败，源镜像可能不支持该架构"
         failed_archs="${failed_archs} ${arch}"
       fi
     done
@@ -232,23 +294,23 @@ sync_image() {
 
   # 检查是否有任何架构同步成功
   if [ -z "${synced_archs}" ]; then
-    echo "❌ 所有架构同步失败"
+    log "❌ 所有架构同步失败"
     sync_success=false
   fi
 
   echo ""
   echo "=========================================="
   if [ "${sync_success}" = true ]; then
-    echo "📊 同步结果汇总"
-    echo "   已同步架构: ${synced_archs}"
+    log "📊 同步结果汇总"
+    log "   已同步架构: ${synced_archs}"
     if [ -n "${failed_archs}" ]; then
-      echo "   未同步架构: ${failed_archs}（源镜像不支持）"
+      log "   未同步架构: ${failed_archs}（源镜像不支持）"
     fi
-    echo "   源镜像: $(get_readable_source)"
-    echo "   目标镜像: $(get_readable_target)"
+    log "   源镜像: $(get_readable_source)"
+    log "   目标镜像: $(get_readable_target)"
     echo "SYNC_STATUS=success"
   else
-    echo "❌ 同步失败"
+    log "❌ 同步失败"
     echo "SYNC_STATUS=failed"
   fi
   echo "=========================================="
@@ -259,12 +321,11 @@ verify_sync() {
   local target_ref
   target_ref=$(construct_target_ref)
 
-  echo ""
-  echo "🔍 验证同步结果..."
+  log "🔍 验证同步结果..."
 
   local verify_output
   if verify_output=$(skopeo inspect --raw "${target_ref}" 2>&1); then
-    echo "✅ 目标镜像验证成功"
+    log "✅ 目标镜像验证成功"
 
     # 解析已同步的架构
     local target_archs=""
@@ -285,10 +346,10 @@ else:
 print(' '.join(archs))
 " 2>/dev/null || echo "unknown")
 
-    echo "📋 目标镜像架构: ${target_archs}"
+    log "📋 目标镜像架构: ${target_archs}"
     echo "TARGET_ARCHS=${target_archs}"
   else
-    echo "⚠️ 无法验证目标镜像: ${verify_output}"
+    log "⚠️ 无法验证目标镜像: ${verify_output}"
     echo "TARGET_ARCHS=unknown"
   fi
 }
@@ -297,14 +358,14 @@ print(' '.join(archs))
 # 主流程
 # ===========================================
 main() {
-  echo "🚀 容器镜像同步工具"
-  echo "=========================================="
-  echo "源镜像: ${SOURCE_IMAGE_NAME}:${SOURCE_IMAGE_TAG}"
-  echo "源仓库: ${SOURCE_REGISTRY}"
-  echo "目标仓库类型: ${REGISTRY_TYPE}"
-  echo "目标仓库: ${TARGET_REGISTRY}"
-  echo "目标命名空间: ${TARGET_NAMESPACE}"
-  echo "=========================================="
+  log "🚀 容器镜像同步工具"
+  log "=========================================="
+  log "源镜像: ${SOURCE_IMAGE_NAME}:${SOURCE_IMAGE_TAG}"
+  log "源仓库: ${SOURCE_REGISTRY}"
+  log "目标仓库类型: ${REGISTRY_TYPE}"
+  log "目标仓库: ${TARGET_REGISTRY}"
+  log "目标命名空间: ${TARGET_NAMESPACE}"
+  log "=========================================="
   echo ""
 
   # 1. 登录目标仓库
@@ -319,8 +380,8 @@ main() {
   # 4. 验证结果
   verify_sync
 
-  echo ""
-  echo "✅ 同步流程完成"
+  log ""
+  log "✅ 同步流程完成"
   echo "SOURCE_IMAGE=$(get_readable_source)"
   echo "TARGET_IMAGE=$(get_readable_target)"
 }
