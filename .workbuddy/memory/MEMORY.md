@@ -9,16 +9,23 @@
 ## 关键文件
 - `.github/workflows/sync-image.yml` - 主工作流
 - `.github/ISSUE_TEMPLATE/sync-image.yml` - Issue 模板
-- `scripts/sync-image.sh` - 镜像同步脚本
+- `scripts/sync-image.sh` - 镜像同步脚本 (9个参数)
 - `.github/registry-config-example` - 配置示例
+
+## 核心命名规则 (重要!)
+- 腾讯云/华为云/阿里云：扁平命名空间，只取镜像名最后一段
+  - nginxinc/nginx:latest → ruichuangdev/nginx:latest (NOT nginxinc/nginx)
+- Docker Hub/Quay/GHCR/私有仓库：支持嵌套路径，保留完整路径
+  - nginxinc/nginx:latest → username/nginxinc/nginx:latest
 
 ## 支持的仓库类型
 dockerhub, ghcr, quay, tencent, huawei, aliyun, private
 - 腾讯云/华为云/阿里云需配置 REGISTRY_NAMESPACE (必填)
-- 密码通过 GitHub Secrets 保护，仓库地址通过 Variables 存储(非保密)
 
 ## 部署注意事项
-- 需在 GitHub 仓库 Settings → Secrets and variables → Actions 中配置:
+- 需在仓库 Settings → Secrets and variables → Actions 配置:
   - Variables: REGISTRY_TYPE, REGISTRY_URL, REGISTRY_NAMESPACE
   - Secrets: REGISTRY_USERNAME, REGISTRY_PASSWORD
-- git push 因网络问题失败，需手动推送
+- 需在仓库 Issues → Labels 预创建 `image-sync` 标签
+- 需手动 git push（沙箱环境无 credential helper）
+- 工作流需 actions/checkout@v4 步骤
