@@ -15,6 +15,7 @@ TARGET_NAMESPACE="${5}"     # 目标命名空间
 TARGET_USERNAME="${6}"      # 目标仓库用户名
 TARGET_PASSWORD="${7}"      # 目标仓库密码/Token
 ARCHITECTURES="${8:-amd64 arm64}" # 要同步的架构列表
+REGISTRY_TYPE="${9:-dockerhub}"   # 目标仓库类型：dockerhub/ghcr/quay/tencent/huawei/aliyun/private
 
 # --- 构造源镜像完整引用 ---
 # 判断镜像名称是否已包含仓库地址
@@ -43,32 +44,53 @@ construct_source_ref() {
 }
 
 # --- 构造目标镜像完整引用 ---
+# 规则：
+#   腾讯云/华为云/阿里云：命名空间是扁平的，不支持嵌套路径
+#     → 只取镜像名的最后一段（如 nginxinc/nginx → nginx）
+#   Docker Hub/Quay/GHCR/私有仓库：命名空间支持嵌套路径
+#     → 保留完整镜像路径（如 nginxinc/nginx → nginxinc/nginx）
 construct_target_ref() {
   local name="${SOURCE_IMAGE_NAME}"
   local tag="${SOURCE_IMAGE_TAG}"
   local registry="${TARGET_REGISTRY}"
   local namespace="${TARGET_NAMESPACE}"
+  local registry_type="${REGISTRY_TYPE}"
 
-  # 对于源镜像名中已包含仓库地址的情况，需要去掉仓库部分
+  # 先从镜像名中提取纯镜像路径（去掉可能嵌入的源仓库地址）
+  local image_path="${name}"
   local first_part
   first_part=$(echo "${name}" | cut -d'/' -f1)
 
   if echo "${first_part}" | grep -qE '\.|:|localhost'; then
-    # 去掉仓库地址部分，只保留镜像路径
-    local image_path
+    # 镜像名已包含源仓库地址，去掉仓库部分
     image_path=$(echo "${name}" | cut -d'/' -f2-)
-    # 如果只有一个部分（没有命名空间），则 image_path 就是 first_part 之后的内容
     if [ -z "${image_path}" ]; then
       image_path="${first_part}"
     fi
-    echo "docker://${registry}/${namespace}/${image_path}:${tag}"
-  elif [ "${registry}" = "docker.io" ] && ! echo "${name}" | grep -q '/'; then
-    # Docker Hub 官方镜像（无命名空间）
-    echo "docker://${registry}/${namespace}/${name}:${tag}"
-  else
-    # 其他情况，直接拼接到目标命名空间下
-    echo "docker://${registry}/${namespace}/${name}:${tag}"
   fi
+
+  # 根据目标仓库类型决定命名方式
+  case "${registry_type}" in
+    tencent|huawei|aliyun)
+      # 扁平命名空间：只取最后一段
+      # nginxinc/nginx → nginx
+      # prometheus/node-exporter → node-exporter
+      # mysql → mysql（无斜杠则直接用）
+      local last_segment
+      if echo "${image_path}" | grep -q '/'; then
+        last_segment=$(echo "${image_path}" | rev | cut -d'/' -f1 | rev)
+      else
+        last_segment="${image_path}"
+      fi
+      echo "docker://${registry}/${namespace}/${last_segment}:${tag}"
+      ;;
+    dockerhub|ghcr|quay|private|*)
+      # 支持嵌套路径：保留完整路径
+      # nginxinc/nginx → nginxinc/nginx
+      # mysql → mysql
+      echo "docker://${registry}/${namespace}/${image_path}:${tag}"
+      ;;
+  esac
 }
 
 # --- 获取不含 docker:// 前缀的可读镜像名 ---
@@ -279,6 +301,7 @@ main() {
   echo "=========================================="
   echo "源镜像: ${SOURCE_IMAGE_NAME}:${SOURCE_IMAGE_TAG}"
   echo "源仓库: ${SOURCE_REGISTRY}"
+  echo "目标仓库类型: ${REGISTRY_TYPE}"
   echo "目标仓库: ${TARGET_REGISTRY}"
   echo "目标命名空间: ${TARGET_NAMESPACE}"
   echo "=========================================="

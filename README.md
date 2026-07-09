@@ -25,15 +25,29 @@
 
 ### 同步后镜像命名规则
 
-以腾讯云为例：
+命名规则取决于目标仓库类型：
 
-| 原始镜像 | 同步后镜像 |
+**腾讯云/华为云/阿里云（扁平命名空间，不支持嵌套路径）：**
+
+命名规则：`{仓库地址}/{命名空间}/{镜像名最后一段}:{Tag}`
+
+| 原始镜像 | 同步后镜像（腾讯云） |
 |---------|-----------|
 | `mysql:8.4.10` | `ccr.ccs.tencentyun.com/ruichuangdev/mysql:8.4.10` |
-| `nginxinc/nginx:latest` | `ccr.ccs.tencentyun.com/ruichuangdev/nginxinc/nginx:latest` |
-| `quay.io/prometheus/node-exporter:v1.8.0` | `ccr.ccs.tencentyun.com/ruichuangdev/prometheus/node-exporter:v1.8.0` |
+| `nginxinc/nginx:latest` | `ccr.ccs.tencentyun.com/ruichuangdev/nginx:latest` |
+| `quay.io/prometheus/node-exporter:v1.8.0` | `ccr.ccs.tencentyun.com/ruichuangdev/node-exporter:v1.8.0` |
 
-命名规则：`{仓库地址}/{命名空间}/{原镜像路径}:{Tag}`
+> ⚠️ 腾讯云/华为云/阿里云的命名空间是扁平的，不支持 `namespace/sub-path/image` 这样的嵌套路径，因此只取镜像名的最后一段。
+
+**Docker Hub/Quay/GHCR/私有仓库（支持嵌套路径）：**
+
+命名规则：`{仓库地址}/{命名空间}/{原镜像完整路径}:{Tag}`
+
+| 原始镜像 | 同步后镜像（Docker Hub） |
+|---------|-----------|
+| `mysql:8.4.10` | `docker.io/youruser/mysql:8.4.10` |
+| `nginxinc/nginx:latest` | `docker.io/youruser/nginxinc/nginx:latest` |
+| `quay.io/prometheus/node-exporter:v1.8.0` | `docker.io/youruser/prometheus/node-exporter:v1.8.0` |
 
 ## 🚀 快速开始
 

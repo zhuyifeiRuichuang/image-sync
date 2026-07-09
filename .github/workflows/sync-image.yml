@@ -319,7 +319,8 @@ jobs:
             "${{ steps.check-config.outputs.registry_namespace }}" \
             "${{ secrets.REGISTRY_USERNAME }}" \
             "${{ secrets.REGISTRY_PASSWORD }}" \
-            "amd64 arm64" 2>&1) || true
+            "amd64 arm64" \
+            "${{ vars.REGISTRY_TYPE }}" 2>&1) || true
 
           echo "${SYNC_OUTPUT}"
 
