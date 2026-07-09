@@ -17,6 +17,12 @@ jobs:
 
     steps:
       # ============================================
+      # 步骤0：检出仓库代码
+      # ============================================
+      - name: 📥 检出仓库代码
+        uses: actions/checkout@v4
+
+      # ============================================
       # 步骤1：解析 Issue 内容
       # ============================================
       - name: 📝 解析 Issue 内容
@@ -81,8 +87,9 @@ jobs:
               SOURCE_REGISTRY="ghcr.io"
               ;;
             *"其他"*)
-              # 使用镜像名称中包含的仓库地址
-              SOURCE_REGISTRY="embedded"
+              # 用户选择"其他"，镜像名称中应已包含完整仓库地址
+              # 保留 docker.io 作为兜底，脚本会自动检测镜像名中的仓库地址
+              SOURCE_REGISTRY="docker.io"
               ;;
           esac
 
@@ -117,7 +124,7 @@ jobs:
           REGISTRY_URL="${REGISTRY_URL:-}"
           REGISTRY_NAMESPACE="${REGISTRY_NAMESPACE:-}"
           REGISTRY_USERNAME="${REGISTRY_USERNAME:-}"
-          HAS_REGISTRY_PASSWORD="${HAS_REGISTRY:-false}"
+          HAS_REGISTRY_PASSWORD="${HAS_REGISTRY_PASSWORD:-false}"
 
           echo "配置检查结果:"
           echo "  REGISTRY_TYPE: ${REGISTRY_TYPE}"
@@ -139,8 +146,11 @@ jobs:
             MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_USERNAME"
           fi
 
-          # REGISTRY_PASSWORD 是 Secret，无法直接读取值，但可以通过尝试登录来验证
-          # 这里我们假设如果 Secret 存在就会传入，通过 HAS_REGISTRY 环境变量标记
+          # 检查 REGISTRY_PASSWORD 是否已配置
+          if [ "${HAS_REGISTRY_PASSWORD}" != "true" ]; then
+            CONFIG_OK="false"
+            MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_PASSWORD"
+          fi
 
           # 根据仓库类型确定默认 URL 和是否需要 namespace
           case "${REGISTRY_TYPE}" in
@@ -223,7 +233,7 @@ jobs:
           REGISTRY_URL: ${{ vars.REGISTRY_URL }}
           REGISTRY_NAMESPACE: ${{ vars.REGISTRY_NAMESPACE }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-          HAS_REGISTRY: ${{ secrets.REGISTRY_PASSWORD != '' }}
+          HAS_REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD != '' }}
           GHCR_NAMESPACE: ${{ vars.GHCR_NAMESPACE }}
 
       # ============================================
