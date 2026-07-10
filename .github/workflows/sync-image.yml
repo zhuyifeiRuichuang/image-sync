@@ -20,7 +20,6 @@ permissions:
 jobs:
   sync-image:
     # 仅处理新增标签为 image-sync 的事件
-    # 模板创建 Issue 时已自动附加 image-sync 标签，会触发本工作流
     if: github.event.label.name == 'image-sync'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -56,7 +55,6 @@ jobs:
 
           # 解析完整镜像地址：registry/image/path:tag
           # 示例：docker.io/apache/seatunnel:2.3.13
-          #       registry.cn-hangzhou.aliyuncs.com/namespace/mysql:8.4.10
 
           PARSE_ERROR="false"
 
@@ -78,13 +76,12 @@ jobs:
               SOURCE_REGISTRY=$(echo "${IMAGE_REF_NO_TAG}" | cut -d'/' -f1)
               IMAGE_NAME=$(echo "${IMAGE_REF_NO_TAG}" | cut -d'/' -f2-)
             else
-              # 用户只填写了镜像名，没有仓库地址，默认用 docker.io
+              # 用户只填写了镜像名，没有仓库地址
               SOURCE_REGISTRY="docker.io"
               IMAGE_NAME="${IMAGE_REF_NO_TAG}"
             fi
 
-            # 3. 校验必须包含仓库地址（根据用户要求：必须填写完整镜像名字）
-            # 简单判断：如果 registry 部分不包含 . 或 :，认为不是完整仓库地址
+            # 3. 校验必须包含仓库地址
             if ! echo "${SOURCE_REGISTRY}" | grep -qE '\.|:|localhost'; then
               echo "❌ 镜像地址不完整，缺少仓库地址。请填写如 docker.io/apache/seatunnel:2.3.13 的完整地址"
               PARSE_ERROR="true"
@@ -116,14 +113,12 @@ jobs:
           echo "🔍 检查目标镜像仓库配置"
           echo "=========================================="
 
-          REGISTRY_TYPE="${REGISTRY_TYPE:-}"
           REGISTRY_URL="${REGISTRY_URL:-}"
           REGISTRY_NAMESPACE="${REGISTRY_NAMESPACE:-}"
           REGISTRY_USERNAME="${REGISTRY_USERNAME:-}"
           HAS_REGISTRY_PASSWORD="${HAS_REGISTRY_PASSWORD:-false}"
 
           echo "配置检查结果:"
-          echo "  REGISTRY_TYPE: ${REGISTRY_TYPE}"
           echo "  REGISTRY_URL: ${REGISTRY_URL}"
           echo "  REGISTRY_NAMESPACE: ${REGISTRY_NAMESPACE}"
           echo "  REGISTRY_USERNAME: 已配置=${REGISTRY_USERNAME:+是}"
@@ -132,9 +127,14 @@ jobs:
           CONFIG_OK="true"
           MISSING_CONFIG=""
 
-          if [ -z "${REGISTRY_TYPE}" ]; then
+          if [ -z "${REGISTRY_URL}" ]; then
             CONFIG_OK="false"
-            MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_TYPE"
+            MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_URL"
+          fi
+
+          if [ -z "${REGISTRY_NAMESPACE}" ]; then
+            CONFIG_OK="false"
+            MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_NAMESPACE"
           fi
 
           if [ -z "${REGISTRY_USERNAME}" ]; then
@@ -142,75 +142,10 @@ jobs:
             MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_USERNAME"
           fi
 
-          # 检查 REGISTRY_PASSWORD 是否已配置
           if [ "${HAS_REGISTRY_PASSWORD}" != "true" ]; then
             CONFIG_OK="false"
             MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_PASSWORD"
           fi
-
-          # 根据仓库类型确定默认 URL 和是否需要 namespace
-          case "${REGISTRY_TYPE}" in
-            dockerhub)
-              if [ -z "${REGISTRY_URL}" ]; then
-                REGISTRY_URL="docker.io"
-              fi
-              # Docker Hub 的 namespace 默认为用户名
-              if [ -z "${REGISTRY_NAMESPACE}" ]; then
-                REGISTRY_NAMESPACE="${REGISTRY_USERNAME}"
-              fi
-              ;;
-            ghcr)
-              if [ -z "${REGISTRY_URL}" ]; then
-                REGISTRY_URL="ghcr.io"
-              fi
-              # GHCR 的 namespace 默认为 GitHub 用户名/组织名
-              if [ -z "${REGISTRY_NAMESPACE}" ]; then
-                REGISTRY_NAMESPACE="${GHCR_NAMESPACE:-}"
-              fi
-              ;;
-            quay)
-              if [ -z "${REGISTRY_URL}" ]; then
-                REGISTRY_URL="quay.io"
-              fi
-              ;;
-            tencent)
-              if [ -z "${REGISTRY_URL}" ]; then
-                REGISTRY_URL="ccr.ccs.tencentyun.com"
-              fi
-              if [ -z "${REGISTRY_NAMESPACE}" ]; then
-                CONFIG_OK="false"
-                MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_NAMESPACE(腾讯云必填)"
-              fi
-              ;;
-            huawei)
-              if [ -z "${REGISTRY_URL}" ]; then
-                REGISTRY_URL="swr.cn-north-4.myhuaweicloud.com"
-              fi
-              if [ -z "${REGISTRY_NAMESPACE}" ]; then
-                CONFIG_OK="false"
-                MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_NAMESPACE(华为云必填)"
-              fi
-              ;;
-            aliyun)
-              if [ -z "${REGISTRY_URL}" ]; then
-                REGISTRY_URL="registry.cn-hangzhou.aliyuncs.com"
-              fi
-              if [ -z "${REGISTRY_NAMESPACE}" ]; then
-                CONFIG_OK="false"
-                MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_NAMESPACE(阿里云必填)"
-              fi
-              ;;
-            private)
-              if [ -z "${REGISTRY_URL}" ]; then
-                CONFIG_OK="false"
-                MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_URL(私有仓库必填)"
-              fi
-              ;;
-            *)
-              CONFIG_OK="false"
-              MISSING_CONFIG="${MISSING_CONFIG} REGISTRY_TYPE(无效类型: ${REGISTRY_TYPE})"
-              ;;
-          esac
 
           echo "config_ok=${CONFIG_OK}" >> "$GITHUB_OUTPUT"
           echo "registry_url=${REGISTRY_URL}" >> "$GITHUB_OUTPUT"
@@ -225,12 +160,10 @@ jobs:
             echo "❌ 仓库配置不完整，缺少: ${MISSING_CONFIG}"
           fi
         env:
-          REGISTRY_TYPE: ${{ vars.REGISTRY_TYPE }}
           REGISTRY_URL: ${{ vars.REGISTRY_URL }}
           REGISTRY_NAMESPACE: ${{ vars.REGISTRY_NAMESPACE }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
           HAS_REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD != '' }}
-          GHCR_NAMESPACE: ${{ vars.GHCR_NAMESPACE }}
 
       # ============================================
       # 步骤3：配置不完整时评论并关闭 Issue
@@ -268,9 +201,8 @@ jobs:
                 `请在本 GitHub 仓库中配置以下 Variables 和 Secrets：\n\n` +
                 `| 配置项 | 类型 | 说明 |\n` +
                 `|--------|------|------|\n` +
-                `| \`REGISTRY_TYPE\` | Variable | 仓库类型：dockerhub / ghcr / quay / tencent / huawei / aliyun / private |\n` +
-                `| \`REGISTRY_URL\` | Variable | 仓库地址（私有仓库必填，其他类型有默认值） |\n` +
-                `| \`REGISTRY_NAMESPACE\` | Variable | 命名空间（腾讯云/华为云/阿里云必填） |\n` +
+                `| \`REGISTRY_URL\` | Variable | 目标仓库地址（如 \`ccr.ccs.tencentyun.com\`、\`docker.io\`） |\n` +
+                `| \`REGISTRY_NAMESPACE\` | Variable | 目标命名空间（如 \`ruichuangdev\`） |\n` +
                 `| \`REGISTRY_USERNAME\` | Secret | 仓库用户名 |\n` +
                 `| \`REGISTRY_PASSWORD\` | Secret | 仓库密码或访问Token |\n\n` +
                 `配置路径：仓库 Settings → Secrets and variables → Actions\n\n` +
@@ -323,7 +255,7 @@ jobs:
 
           chmod +x scripts/sync-image.sh
 
-          # 运行同步脚本并捕获输出
+          # 运行同步脚本并捕获输出（脚本现在只有8个参数，不再需要 REGISTRY_TYPE）
           SYNC_OUTPUT=$(bash scripts/sync-image.sh \
             "${{ steps.parse-issue.outputs.image_name }}" \
             "${{ steps.parse-issue.outputs.image_tag }}" \
@@ -332,8 +264,7 @@ jobs:
             "${{ steps.check-config.outputs.registry_namespace }}" \
             "${{ secrets.REGISTRY_USERNAME }}" \
             "${{ secrets.REGISTRY_PASSWORD }}" \
-            "amd64 arm64" \
-            "${{ vars.REGISTRY_TYPE }}" 2>&1) || true
+            "amd64 arm64" 2>&1) || true
 
           echo "${SYNC_OUTPUT}"
 
@@ -364,11 +295,7 @@ jobs:
           script: |
             const sourceImage = '${{ steps.sync.outputs.source_image }}';
             const targetImage = '${{ steps.sync.outputs.target_image }}';
-            const availableArchs = '${{ steps.sync.outputs.available_archs }}';
             const targetArchs = '${{ steps.sync.outputs.target_archs }}';
-            const imageName = '${{ steps.parse-issue.outputs.image_name }}';
-            const imageTag = '${{ steps.parse-issue.outputs.image_tag }}';
-            const registryType = '${{ vars.REGISTRY_TYPE }}';
             const registryUrl = '${{ steps.check-config.outputs.registry_url }}';
             const registryNamespace = '${{ steps.check-config.outputs.registry_namespace }}';
 
@@ -402,9 +329,8 @@ jobs:
               `|------|----|\n` +
               `| 原始镜像 | \`${sourceImage}\` |\n` +
               `| 同步后镜像 | \`${targetImage}\` |\n` +
-              `| 仓库类型 | ${registryType} |\n` +
-              `| 目标仓库 | ${registryUrl} |\n` +
-              `| 目标命名空间 | ${registryNamespace} |\n\n` +
+              `| 目标仓库 | \`${registryUrl}\` |\n` +
+              `| 目标命名空间 | \`${registryNamespace}\` |\n\n` +
               `### 已同步架构\n\n${archsDisplay}${missingArchsInfo}\n\n` +
               `### 使用方法\n\n` +
               `\`\`\`bash\n` +
@@ -439,10 +365,7 @@ jobs:
             const targetImage = '${{ steps.sync.outputs.target_image }}';
             const errorType = '${{ steps.sync.outputs.error_type }}';
             const errorDetail = '${{ steps.sync.outputs.error_detail }}';
-            const imageName = '${{ steps.parse-issue.outputs.image_name }}';
-            const imageTag = '${{ steps.parse-issue.outputs.image_tag }}';
             const registryUrl = '${{ steps.check-config.outputs.registry_url }}';
-            const registryType = '${{ vars.REGISTRY_TYPE }}';
 
             // 根据 ERROR_TYPE 生成不同的错误说明和建议
             let errorTitle = '';
@@ -451,36 +374,31 @@ jobs:
 
             if (errorType === 'login_failed') {
               errorTitle = '❌ 目标仓库登录失败';
-              errorExplanation = `登录目标仓库 **${registryUrl}** 失败。skopeo 返回了认证错误。`;
+              errorExplanation = `登录目标仓库 **${registryUrl}** 失败。`;
               suggestions =
                 `1. 检查 **Secrets** 中 \`REGISTRY_USERNAME\` 是否正确（路径：Settings → Secrets and variables → Actions）\n` +
-                `2. 检查 **Secrets** 中 \`REGISTRY_PASSWORD\` 是否正确，注意：\n` +
-                `   - 腾讯云/华为云/阿里云：使用的是 **固定密码**（不是临时 Token）\n` +
-                `   - Docker Hub：可使用密码或 Access Token\n` +
-                `   - GHCR：使用 GitHub Personal Access Token（需有 write:packages 权限）\n` +
-                `   - Quay：使用机器人账号 Token\n` +
-                `3. 如果密码包含特殊字符，确认 Secret 中保存的值未被截断\n` +
-                `4. 可在本地手动验证：\n` +
+                `2. 检查 **Secrets** 中 \`REGISTRY_PASSWORD\` 是否正确\n` +
+                `3. 在本地手动验证：\n` +
                 `   \`\`\`bash\n` +
-                `   skopeo login ${registryUrl} -u <用户名> --password-stdin\n` +
+                `   docker login ${registryUrl}\n` +
                 `   \`\`\``;
             } else if (errorType === 'source_image_not_found') {
               errorTitle = '❌ 源镜像不存在或无法访问';
-              errorExplanation = `指定的源镜像 **${sourceImage || imageName + ':' + imageTag}** 在源仓库中不存在，或为私有镜像需要认证。`;
+              errorExplanation = `指定的源镜像 **${sourceImage}** 在源仓库中不存在，或为私有镜像需要认证。`;
               suggestions =
                 `1. 确认镜像完整地址是否拼写正确（例如：\`docker.io/apache/seatunnel:2.3.13\`）\n` +
                 `2. 如果源镜像为私有镜像，当前不支持私有源镜像同步\n` +
                 `3. 在本地验证源镜像是否存在：\n` +
                 `   \`\`\`bash\n` +
-                `   skopeo inspect --raw docker://${sourceImage || imageName + ':' + imageTag}\n` +
+                `   skopeo inspect --raw docker://${sourceImage}\n` +
                 `   \`\`\``;
             } else if (errorType === 'sync_failed') {
               errorTitle = '❌ 镜像同步失败';
-              errorExplanation = `所有架构（amd64/arm64）同步均失败。可能是网络问题、目标仓库权限不足、或超时。`;
+              errorExplanation = `所有架构（amd64/arm64）同步均失败。`;
               suggestions =
                 `1. 检查目标仓库 **${registryUrl}** 的命名空间是否已创建\n` +
                 `2. 检查目标仓库的推送权限是否正确\n` +
-                `3. 网络超时（30分钟限制）：大镜像跨国同步可能超时，请重试\n` +
+                `3. 大镜像跨国同步可能超时（30分钟限制），请重试\n` +
                 `4. 查看 Action 运行日志获取 skopeo 的完整输出`;
             } else if (errorType === 'partial_sync_failed') {
               errorTitle = '⚠️ 部分架构同步失败';
@@ -499,7 +417,6 @@ jobs:
             // 错误详情部分
             let errorDetailSection = '';
             if (errorDetail) {
-              // 截取过长内容，保留最后 500 字符
               const displayDetail = errorDetail.length > 500
                 ? '...' + errorDetail.substring(errorDetail.length - 500)
                 : errorDetail;
@@ -510,9 +427,7 @@ jobs:
               `### 镜像信息\n\n` +
               `| 项目 | 值 |\n` +
               `|------|----|\n` +
-              `| 镜像名称 | \`${imageName}\` |\n` +
-              `| 镜像Tag | \`${imageTag}\` |\n` +
-              `| 完整引用 | \`${sourceImage || imageName + ':' + imageTag}\` |\n` +
+              `| 源镜像 | \`${sourceImage}\` |\n` +
               `| 目标仓库 | \`${registryUrl}\` |\n` +
               `| 目标镜像 | \`${targetImage || '未生成'}\` |\n\n` +
               `### 错误原因\n\n${errorExplanation}${errorDetailSection}\n\n` +

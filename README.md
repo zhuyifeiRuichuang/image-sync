@@ -10,44 +10,22 @@
 - 📊 **自动反馈**：在 Issue 中自动评论同步结果，包含原镜像和目标镜像信息
 - 🌐 **多云支持**：支持 Docker Hub、GHCR、Quay、腾讯云、华为云、阿里云及私有仓库
 - ⚡ **失败检测**：未配置仓库时自动反馈，源镜像不存在时自动报错
+- 🎯 **配置简单**：只需配置仓库地址和命名空间，无需选择仓库类型
 
-## 🏠 支持的目标仓库
+## 🏠 同步后镜像命名规则
 
-| 仓库类型 | 仓库地址 | 命名空间要求 | 说明 |
-|----------|----------|-------------|------|
-| `dockerhub` | `docker.io` | 可选（默认为用户名） | Docker Hub 官方仓库 |
-| `ghcr` | `ghcr.io` | 可选（默认为 GitHub 用户名） | GitHub Container Registry |
-| `quay` | `quay.io` | 可选 | Red Hat Quay 仓库 |
-| `tencent` | `ccr.ccs.tencentyun.com` | **必填** | 腾讯云容器镜像服务 |
-| `huawei` | `swr.cn-north-4.myhuaweicloud.com` | **必填** | 华为云 SWR（可指定区域） |
-| `aliyun` | `registry.cn-hangzhou.aliyuncs.com` | **必填** | 阿里云 ACR（可指定区域） |
-| `private` | 用户自定义 | 可选 | 私有镜像仓库 |
-
-### 同步后镜像命名规则
-
-命名规则取决于目标仓库类型：
-
-**腾讯云/华为云/阿里云（扁平命名空间，不支持嵌套路径）：**
+统一使用扁平命名空间，只取镜像名的最后一段：
 
 命名规则：`{仓库地址}/{命名空间}/{镜像名最后一段}:{Tag}`
 
-| 原始镜像 | 同步后镜像（腾讯云） |
+| 原始镜像 | 同步后镜像 |
 |---------|-----------|
-| `mysql:8.4.10` | `ccr.ccs.tencentyun.com/ruichuangdev/mysql:8.4.10` |
-| `nginxinc/nginx:latest` | `ccr.ccs.tencentyun.com/ruichuangdev/nginx:latest` |
+| `docker.io/apache/seatunnel:2.3.13` | `ccr.ccs.tencentyun.com/ruichuangdev/seatunnel:2.3.13` |
+| `docker.io/library/mysql:8.4.10` | `ccr.ccs.tencentyun.com/ruichuangdev/mysql:8.4.10` |
+| `docker.io/nginxinc/nginx:latest` | `ccr.ccs.tencentyun.com/ruichuangdev/nginx:latest` |
 | `quay.io/prometheus/node-exporter:v1.8.0` | `ccr.ccs.tencentyun.com/ruichuangdev/node-exporter:v1.8.0` |
 
-> ⚠️ 腾讯云/华为云/阿里云的命名空间是扁平的，不支持 `namespace/sub-path/image` 这样的嵌套路径，因此只取镜像名的最后一段。
-
-**Docker Hub/Quay/GHCR/私有仓库（支持嵌套路径）：**
-
-命名规则：`{仓库地址}/{命名空间}/{原镜像完整路径}:{Tag}`
-
-| 原始镜像 | 同步后镜像（Docker Hub） |
-|---------|-----------|
-| `mysql:8.4.10` | `docker.io/youruser/mysql:8.4.10` |
-| `nginxinc/nginx:latest` | `docker.io/youruser/nginxinc/nginx:latest` |
-| `quay.io/prometheus/node-exporter:v1.8.0` | `docker.io/youruser/prometheus/node-exporter:v1.8.0` |
+> 所有目标仓库均使用扁平命名空间（只取镜像名最后一段），无论 Docker Hub、腾讯云、华为云还是阿里云。
 
 ## 🚀 快速开始
 
@@ -63,10 +41,8 @@
 
 | 变量名 | 说明 | 示例 |
 |--------|------|------|
-| `REGISTRY_TYPE` | 目标仓库类型 | `tencent` |
-| `REGISTRY_URL` | 目标仓库地址（部分类型有默认值） | `ccr.ccs.tencentyun.com` |
-| `REGISTRY_NAMESPACE` | 目标命名空间（腾讯/华为/阿里云必填） | `ruichuangdev` |
-| `GHCR_NAMESPACE` | GHCR 专用命名空间（可选） | `your-github-org` |
+| `REGISTRY_URL` | 目标仓库地址（docker login 时使用的地址） | `ccr.ccs.tencentyun.com` |
+| `REGISTRY_NAMESPACE` | 目标命名空间 | `ruichuangdev` |
 
 #### Secrets（敏感信息，日志自动屏蔽）
 
@@ -75,36 +51,36 @@
 | `REGISTRY_USERNAME` | 目标仓库用户名 | `your-username` |
 | `REGISTRY_PASSWORD` | 目标仓库密码或 Token | `your-token` |
 
-#### 各平台密码/Token 获取方式
+#### 各平台仓库地址参考
 
-- **Docker Hub**：Account Settings → Security → New Access Token
-- **GHCR**：GitHub PAT (需 `write:packages` 权限)
-- **Quay**：Account Settings → API Token → Generate Token
-- **腾讯云**：容器镜像服务控制台 → 获取登录密码
-- **华为云**：SWR 控制台 → 获取登录密码
-- **阿里云**：ACR 控制台 → 获取登录密码
+| 平台 | 仓库地址示例 |
+|------|-------------|
+| 腾讯云 | `ccr.ccs.tencentyun.com` |
+| 华为云（华北-北京四） | `swr.cn-north-4.myhuaweicloud.com` |
+| 阿里云（华东1-杭州） | `registry.cn-hangzhou.aliyuncs.com` |
+| Docker Hub | `docker.io` |
+| GHCR | `ghcr.io` |
+| Quay | `quay.io` |
+| 私有仓库 | 自定义地址 |
 
 ### 3. 提交 Issue 同步镜像
 
 1. 在仓库中点击 **New Issue**
 2. 选择 **🔄 容器镜像同步请求** 模板
-3. 填写镜像名称和 Tag
+3. 填写完整的镜像地址（必须包含仓库地址，如 `docker.io/apache/seatunnel:2.3.13`）
 4. 提交 Issue，Action 自动运行
 
 #### Issue 填写示例
 
-**同步 Docker Hub 官方镜像：**
-- 镜像名称：`mysql`
-- 镜像 Tag：`8.4.10`
+```
+docker.io/apache/seatunnel:2.3.13
+docker.io/library/mysql:8.4.10
+docker.io/nginxinc/nginx:latest
+quay.io/prometheus/node-exporter:latest
+ghcr.io/owner/repo:tag
+```
 
-**同步带命名空间的镜像：**
-- 需像名称：`nginxinc/nginx-prometheus-exporter`
-- 镜像 Tag：`1.4.0`
-
-**同步非 Docker Hub 镜像：**
-- 镜像名称：`quay.io/prometheus/node-exporter`
-- 需像 Tag：`v1.8.0`
-- 源仓库：选择 `quay.io` 或在镜像名称中填写完整地址
+> ⚠️ 必须填写完整的镜像地址（包含仓库地址），不能只写 `apache/seatunnel:2.3.13`。
 
 ### 4. 查看同步结果
 
@@ -116,25 +92,14 @@ Action 运行完成后会自动在 Issue 中评论结果：
 
 | 项目 | 值 |
 |------|----|
-| 原始镜像 | `mysql:8.4.10` |
-| 同步后镜像 | `ccr.ccs.tencentyun.com/ruichuangdev/mysql:8.4.10` |
+| 原始镜像 | docker.io/apache/seatunnel:2.3.13 |
+| 同步后镜像 | ccr.ccs.tencentyun.com/ruichuangdev/seatunnel:2.3.13 |
 
 ### 已同步架构
 ✅ amd64 (x86_64)
 ✅ arm64 (aarch64)
 
-docker pull ccr.ccs.tencentyun.com/ruichuangdev/mysql:8.4.10
-```
-
-**未配置仓库示例：**
-```
-## ❌ 未配置目标容器镜像仓库
-
-当前仓库未完整配置目标容器镜像仓库，无法同步镜像。
-
-### 缺少的配置项
-- `REGISTRY_TYPE`
-- `REGISTRY_NAMESPACE`
+docker pull ccr.ccs.tencentyun.com/ruichuangdev/seatunnel:2.3.13
 ```
 
 ## 📁 项目结构
@@ -155,10 +120,10 @@ image-sync/
 ## 🔧 工作原理
 
 ```
-用户提交 Issue (镜像名+Tag)
+用户提交 Issue (完整镜像地址)
         │
         ▼
-GitHub Actions 触发
+GitHub Actions 触发 (labeled 事件)
         │
         ▼
 解析 Issue 内容
@@ -188,11 +153,11 @@ GitHub Actions 触发
 ## ⚠️ 注意事项
 
 1. **密码安全**：`REGISTRY_USERNAME` 和 `REGISTRY_PASSWORD` 必须配置为 **Secret**，切勿配置为 Variable
-2. **命名空间**：腾讯云、华为云、阿里云必须配置 `REGISTRY_NAMESPACE`
-3. **仓库地址**：华为云和阿里云的仓库地址因区域不同而异，请根据实际情况配置
+2. **命名空间**：`REGISTRY_NAMESPACE` 必填，对应目标仓库的命名空间/组织
+3. **仓库地址**：`REGISTRY_URL` 必填，填写 `docker login` 时使用的地址
 4. **架构限制**：如果源镜像不支持某个架构（如只有 amd64），该架构会跳过并在反馈中标注
 5. **私有源镜像**：当前仅支持同步公有源镜像，私有源镜像需要额外配置源仓库认证
-6. **GHCR 权限**：使用 GHCR 需要确保 Actions 有 `packages: write` 权限
+6. **镜像地址**：Issue 中必须填写完整的镜像地址（包含仓库地址），不能只写镜像路径
 
 ## 🌍 华为云/阿里云各区域仓库地址
 
@@ -202,7 +167,7 @@ GitHub Actions 触发
 |------|----------|
 | 华北-北京四 | `swr.cn-north-4.myhuaweicloud.com` |
 | 华北-北京一 | `swr.cn-north-1.myhuaweicloud.com` |
-|华东-上海二| `swr.cn-east-2.myhuaweicloud.com` |
+| 华东-上海二 | `swr.cn-east-2.myhuaweicloud.com` |
 | 华南-广州 | `swr.cn-south-1.myhuaweicloud.com` |
 | 东北-大连 | `swr.cn-northeast-1.myhuaweicloud.com` |
 
@@ -216,7 +181,7 @@ GitHub Actions 触发
 | 华北2-北京 | `registry.cn-beijing.aliyuncs.com` |
 | 华南1-深圳 | `registry.cn-shenzhen.aliyuncs.com` |
 | 华南3-广州 | `registry.cn-guangzhou.aliyuncs.com` |
-| 香港 | `registry.cn-hongkong.aliyuncs.com` |
+| 中国香港 | `registry.cn-hongkong.aliyuncs.com` |
 | 美国-弗吉尼亚 | `registry.us-east-1.aliyuncs.com` |
 
 ## 📜 License

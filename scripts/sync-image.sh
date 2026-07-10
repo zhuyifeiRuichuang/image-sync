@@ -7,19 +7,16 @@ set -euo pipefail
 # ===========================================
 
 # --- 输入参数 ---
-SOURCE_IMAGE_NAME="${1}"   # 镜像名称（如 mysql 或 nginxinc/nginx）
+SOURCE_IMAGE_NAME="${1}"         # 镜像路径（如 apache/seatunnel）
 SOURCE_IMAGE_TAG="${2:-latest}"  # 镜像tag，默认latest
-SOURCE_REGISTRY="${3:-docker.io}" # 源仓库地址
-TARGET_REGISTRY="${4}"      # 目标仓库地址
-TARGET_NAMESPACE="${5}"     # 目标命名空间
-TARGET_USERNAME="${6}"      # 目标仓库用户名
-TARGET_PASSWORD="${7}"      # 目标仓库密码/Token
+SOURCE_REGISTRY="${3:-docker.io}" # 源仓库地址（如 docker.io）
+TARGET_REGISTRY="${4}"           # 目标仓库地址（如 ccr.ccs.tencentyun.com）
+TARGET_NAMESPACE="${5}"          # 目标命名空间（如 ruichuangdev）
+TARGET_USERNAME="${6}"           # 目标仓库用户名
+TARGET_PASSWORD="${7}"           # 目标仓库密码/Token
 ARCHITECTURES="${8:-amd64 arm64}" # 要同步的架构列表
-REGISTRY_TYPE="${9:-dockerhub}"   # 目标仓库类型：dockerhub/ghcr/quay/tencent/huawei/aliyun/private
 
 # --- 构造源镜像完整引用 ---
-# 判断镜像名称是否已包含仓库地址
-# 如果镜像名称包含 '/' 且第一部分包含 '.' 或 ':'，则视为完整引用
 construct_source_ref() {
   local name="${SOURCE_IMAGE_NAME}"
   local tag="${SOURCE_IMAGE_TAG}"
@@ -34,29 +31,22 @@ construct_source_ref() {
     echo "docker://${name}:${tag}"
   else
     # 需要拼接仓库地址
-    if [ "${registry}" = "docker.io" ]; then
-      # Docker Hub：官方镜像在 library/ 下，但 skopeo/docker pull 会自动处理
-      echo "docker://${name}:${tag}"
-    else
-      echo "docker://${registry}/${name}:${tag}"
-    fi
+    echo "docker://${registry}/${name}:${tag}"
   fi
 }
 
 # --- 构造目标镜像完整引用 ---
-# 规则：
-#   腾讯云/华为云/阿里云：命名空间是扁平的，不支持嵌套路径
-#     → 只取镜像名的最后一段（如 nginxinc/nginx → nginx）
-#   Docker Hub/Quay/GHCR/私有仓库：命名空间支持嵌套路径
-#     → 保留完整镜像路径（如 nginxinc/nginx → nginxinc/nginx）
+# 统一使用扁平命名空间：只取镜像名最后一段
+# 例如：apache/seatunnel → seatunnel
+#       nginxinc/nginx → nginx
+#       mysql → mysql（无斜杠则直接用）
 construct_target_ref() {
   local name="${SOURCE_IMAGE_NAME}"
   local tag="${SOURCE_IMAGE_TAG}"
   local registry="${TARGET_REGISTRY}"
   local namespace="${TARGET_NAMESPACE}"
-  local registry_type="${REGISTRY_TYPE}"
 
-  # 先从镜像名中提取纯镜像路径（去掉可能嵌入的源仓库地址）
+  # 从镜像名中提取纯镜像路径（去掉可能嵌入的源仓库地址）
   local image_path="${name}"
   local first_part
   first_part=$(echo "${name}" | cut -d'/' -f1)
@@ -69,28 +59,15 @@ construct_target_ref() {
     fi
   fi
 
-  # 根据目标仓库类型决定命名方式
-  case "${registry_type}" in
-    tencent|huawei|aliyun)
-      # 扁平命名空间：只取最后一段
-      # nginxinc/nginx → nginx
-      # prometheus/node-exporter → node-exporter
-      # mysql → mysql（无斜杠则直接用）
-      local last_segment
-      if echo "${image_path}" | grep -q '/'; then
-        last_segment=$(echo "${image_path}" | rev | cut -d'/' -f1 | rev)
-      else
-        last_segment="${image_path}"
-      fi
-      echo "docker://${registry}/${namespace}/${last_segment}:${tag}"
-      ;;
-    dockerhub|ghcr|quay|private|*)
-      # 支持嵌套路径：保留完整路径
-      # nginxinc/nginx → nginxinc/nginx
-      # mysql → mysql
-      echo "docker://${registry}/${namespace}/${image_path}:${tag}"
-      ;;
-  esac
+  # 扁平命名空间：只取最后一段
+  local last_segment
+  if echo "${image_path}" | grep -q '/'; then
+    last_segment=$(echo "${image_path}" | rev | cut -d'/' -f1 | rev)
+  else
+    last_segment="${image_path}"
+  fi
+
+  echo "docker://${registry}/${namespace}/${last_segment}:${tag}"
 }
 
 # --- 获取不含 docker:// 前缀的可读镜像名 ---
@@ -198,8 +175,6 @@ log() {
 }
 
 # --- 运行命令并带进度心跳 ---
-# 在后台运行命令，每 30 秒打印一次心跳，避免日志长时间无输出被 GitHub Actions 误判卡死
-# 输出保存到全局变量 LAST_CMD_OUTPUT 供错误诊断使用
 LAST_CMD_OUTPUT=""
 LAST_CMD_EXIT_CODE=0
 
@@ -402,7 +377,6 @@ main() {
   log "=========================================="
   log "源镜像: ${SOURCE_IMAGE_NAME}:${SOURCE_IMAGE_TAG}"
   log "源仓库: ${SOURCE_REGISTRY}"
-  log "目标仓库类型: ${REGISTRY_TYPE}"
   log "目标仓库: ${TARGET_REGISTRY}"
   log "目标命名空间: ${TARGET_NAMESPACE}"
   log "=========================================="
@@ -412,7 +386,6 @@ main() {
   if ! login_target_registry; then
     log "❌ 主流程：登录失败，终止同步"
     echo "SYNC_STATUS=failed"
-    # ERROR_TYPE 和 ERROR_DETAIL 已在 login_target_registry 中输出
     return 1
   fi
 
@@ -420,13 +393,11 @@ main() {
   if ! inspect_source_image; then
     log "❌ 主流程：源镜像检查失败，终止同步"
     echo "SYNC_STATUS=failed"
-    # ERROR_TYPE 和 ERROR_DETAIL 已在 inspect_source_image 中输出
     return 1
   fi
 
   # 3. 同步镜像
   sync_image
-  # sync_image 内部已处理 ERROR_TYPE/ERROR_DETAIL
 
   # 4. 验证结果
   verify_sync
