@@ -175,6 +175,7 @@ log() {
 }
 
 # --- 运行命令并带进度心跳 ---
+# 后台运行命令，同时用 tail -f 实时显示输出，避免日志长时间无输出被 GitHub Actions 误判卡死
 LAST_CMD_OUTPUT=""
 LAST_CMD_EXIT_CODE=0
 
@@ -195,11 +196,15 @@ run_with_heartbeat() {
   eval "${cmd}" > "${tmp_output}" 2>&1 &
   local cmd_pid=$!
 
-  # 进度心跳
+  # 实时显示输出（tail 会在命令进程结束后自动退出）
+  tail -f --pid="${cmd_pid}" "${tmp_output}" 2>/dev/null &
+  local tail_pid=$!
+
+  # 进度心跳：每 10 秒打印一次，让用户知道任务仍在运行
   while kill -0 "${cmd_pid}" 2>/dev/null; do
     elapsed=$(($(date +%s) - start_time))
     log "⏳ ${desc} 进行中... 已耗时 ${elapsed} 秒"
-    sleep 30
+    sleep 10
   done
 
   # 等待命令结束并获取退出码
@@ -207,13 +212,18 @@ run_with_heartbeat() {
   local exit_code=$?
   LAST_CMD_EXIT_CODE=${exit_code}
 
+  # 给 tail 一点收尾时间，然后清理
+  sleep 0.5
+  kill "${tail_pid}" 2>/dev/null || true
+  wait "${tail_pid}" 2>/dev/null || true
+
   end_time=$(date +%s)
   elapsed=$((end_time - start_time))
 
   # 保存输出到全局变量（截取最后 2000 字符防止过长）
-  LAST_CMD_OUTPUT=$(cat "${tmp_output}" | tail -c 2000)
+  LAST_CMD_OUTPUT=$(tail -c 2000 "${tmp_output}")
 
-  # 打印完整输出
+  # 打印完整输出（tail 可能已经实时显示过，这里兜底确保完整）
   echo ""
   echo "--- ${desc} 详细输出 (耗时 ${elapsed} 秒) ---"
   cat "${tmp_output}"
@@ -249,6 +259,16 @@ sync_image() {
     local layers_count
     layers_count=$(echo "${image_info}" | python3 -c "import sys, json; d=json.load(sys.stdin); print(len(d.get('Layers', [])))" 2>/dev/null || echo "unknown")
     log "📋 源镜像层数: ${layers_count}"
+
+    local image_size
+    image_size=$(echo "${image_info}" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('Size', 0))" 2>/dev/null || echo "0")
+    if [ -n "${image_size}" ] && [ "${image_size}" != "0" ]; then
+      # 将字节转换为人类可读格式
+      local human_size
+      human_size=$(numfmt --to=iec-i "${image_size}" 2>/dev/null || echo "${image_size} bytes")
+      log "📋 源镜像大小: ${human_size}"
+      log "💡 大镜像跨国同步通常需要 10-30 分钟，请耐心等待"
+    fi
   fi
 
   # 先尝试用 --all 同步整个 manifest list（多架构）
