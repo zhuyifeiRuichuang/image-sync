@@ -333,13 +333,15 @@ jobs:
           TARGET_IMAGE=$(echo "${SYNC_OUTPUT}" | grep "^TARGET_IMAGE=" | cut -d= -f2 || echo "")
           AVAILABLE_ARCHS=$(echo "${SYNC_OUTPUT}" | grep "^AVAILABLE_ARCHS=" | cut -d= -f2 || echo "")
           TARGET_ARCHS=$(echo "${SYNC_OUTPUT}" | grep "^TARGET_ARCHS=" | cut -d= -f2 || echo "")
-          ERROR_DETAIL=$(echo "${SYNC_OUTPUT}" | grep "^ERROR_DETAIL=" | cut -d= -f2 || echo "")
+          ERROR_TYPE=$(echo "${SYNC_OUTPUT}" | grep "^ERROR_TYPE=" | cut -d= -f2 || echo "")
+          ERROR_DETAIL=$(echo "${SYNC_OUTPUT}" | grep "^ERROR_DETAIL=" | cut -d= -f2- || echo "")
 
           echo "sync_status=${SYNC_STATUS}" >> "$GITHUB_OUTPUT"
           echo "source_image=${SOURCE_IMAGE}" >> "$GITHUB_OUTPUT"
           echo "target_image=${TARGET_IMAGE}" >> "$GITHUB_OUTPUT"
           echo "available_archs=${AVAILABLE_ARCHS}" >> "$GITHUB_OUTPUT"
           echo "target_archs=${TARGET_ARCHS}" >> "$GITHUB_OUTPUT"
+          echo "error_type=${ERROR_TYPE}" >> "$GITHUB_OUTPUT"
           echo "error_detail=${ERROR_DETAIL}" >> "$GITHUB_OUTPUT"
 
       # ============================================
@@ -425,28 +427,86 @@ jobs:
           script: |
             const sourceImage = '${{ steps.sync.outputs.source_image }}';
             const targetImage = '${{ steps.sync.outputs.target_image }}';
+            const errorType = '${{ steps.sync.outputs.error_type }}';
             const errorDetail = '${{ steps.sync.outputs.error_detail }}';
             const imageName = '${{ steps.parse-issue.outputs.image_name }}';
             const imageTag = '${{ steps.parse-issue.outputs.image_tag }}';
+            const registryUrl = '${{ steps.check-config.outputs.registry_url }}';
+            const registryType = '${{ vars.REGISTRY_TYPE }}';
 
-            let errorInfo = '';
-            if (errorDetail) {
-              errorInfo = `\n\n### 错误详情\n\n\`\`\`\n${errorDetail}\n\`\`\``;
+            // 根据 ERROR_TYPE 生成不同的错误说明和建议
+            let errorTitle = '';
+            let errorExplanation = '';
+            let suggestions = '';
+
+            if (errorType === 'login_failed') {
+              errorTitle = '❌ 目标仓库登录失败';
+              errorExplanation = `登录目标仓库 **${registryUrl}** 失败。skopeo 返回了认证错误。`;
+              suggestions =
+                `1. 检查 **Secrets** 中 \`REGISTRY_USERNAME\` 是否正确（路径：Settings → Secrets and variables → Actions）\n` +
+                `2. 检查 **Secrets** 中 \`REGISTRY_PASSWORD\` 是否正确，注意：\n` +
+                `   - 腾讯云/华为云/阿里云：使用的是 **固定密码**（不是临时 Token）\n` +
+                `   - Docker Hub：可使用密码或 Access Token\n` +
+                `   - GHCR：使用 GitHub Personal Access Token（需有 write:packages 权限）\n` +
+                `   - Quay：使用机器人账号 Token\n` +
+                `3. 如果密码包含特殊字符，确认 Secret 中保存的值未被截断\n` +
+                `4. 可在本地手动验证：\n` +
+                `   \`\`\`bash\n` +
+                `   skopeo login ${registryUrl} -u <用户名> --password-stdin\n` +
+                `   \`\`\``;
+            } else if (errorType === 'source_image_not_found') {
+              errorTitle = '❌ 源镜像不存在或无法访问';
+              errorExplanation = `指定的源镜像 **${imageName}:${imageTag}** 在源仓库中不存在，或为私有镜像需要认证。`;
+              suggestions =
+                `1. 确认镜像名称和 Tag 是否拼写正确\n` +
+                `2. 如果源镜像为私有镜像，当前不支持私有源镜像同步\n` +
+                `3. 在本地验证源镜像是否存在：\n` +
+                `   \`\`\`bash\n` +
+                `   skopeo inspect --raw docker://${imageName}:${imageTag}\n` +
+                `   \`\`\``;
+            } else if (errorType === 'sync_failed') {
+              errorTitle = '❌ 镜像同步失败';
+              errorExplanation = `所有架构（amd64/arm64）同步均失败。可能是网络问题、目标仓库权限不足、或超时。`;
+              suggestions =
+                `1. 检查目标仓库 **${registryUrl}** 的命名空间是否已创建\n` +
+                `2. 检查目标仓库的推送权限是否正确\n` +
+                `3. 网络超时（30分钟限制）：大镜像跨国同步可能超时，请重试\n` +
+                `4. 查看 Action 运行日志获取 skopeo 的完整输出`;
+            } else if (errorType === 'partial_sync_failed') {
+              errorTitle = '⚠️ 部分架构同步失败';
+              errorExplanation = `部分架构同步失败，但至少有一个架构同步成功。`;
+              suggestions =
+                `1. 源镜像可能不支持所有请求的架构\n` +
+                `2. 这是正常现象，不影响已成功架构的使用`;
+            } else {
+              errorTitle = '❌ 同步失败';
+              errorExplanation = '同步过程中出现未知错误。';
+              suggestions =
+                `1. 请查看 Action 运行日志获取详细信息\n` +
+                `2. 检查仓库配置是否正确`;
             }
 
-            const commentBody = `## ❌ 容器镜像同步失败\n\n` +
+            // 错误详情部分
+            let errorDetailSection = '';
+            if (errorDetail) {
+              // 截取过长内容，保留最后 500 字符
+              const displayDetail = errorDetail.length > 500
+                ? '...' + errorDetail.substring(errorDetail.length - 500)
+                : errorDetail;
+              errorDetailSection = `\n\n### 🔍 错误详情\n\n\`\`\`\n${displayDetail}\n\`\`\``;
+            }
+
+            const commentBody = `## ${errorTitle}\n\n` +
               `### 镜像信息\n\n` +
               `| 项目 | 值 |\n` +
               `|------|----|\n` +
               `| 镜像名称 | \`${imageName}\` |\n` +
               `| 镜像Tag | \`${imageTag}\` |\n` +
               `| 完整引用 | \`${sourceImage || imageName + ':' + imageTag}\` |\n` +
-              `| 目标镜像 | \`${targetImage || '未生成'}\` |${errorInfo}\n\n` +
-              `### 可能的原因\n\n` +
-              `- 源镜像不存在或为私有镜像\n` +
-              `- 目标仓库认证失败\n` +
-              `- 网络连接问题\n\n` +
-              `请检查以上信息后重新提交 Issue。\n\n` +
+              `| 目标仓库 | \`${registryUrl}\` |\n` +
+              `| 目标镜像 | \`${targetImage || '未生成'}\` |\n\n` +
+              `### 错误原因\n\n${errorExplanation}${errorDetailSection}\n\n` +
+              `### 建议\n\n${suggestions}\n\n` +
               `---\n*由 [image-sync](https://github.com/${context.repo.owner}/${context.repo.repo}) Action 自动反馈*`;
 
             await github.rest.issues.createComment({

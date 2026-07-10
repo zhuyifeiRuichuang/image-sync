@@ -110,12 +110,19 @@ get_readable_target() {
 login_target_registry() {
   log "🔐 正在登录目标镜像仓库: ${TARGET_REGISTRY}"
 
-  if echo "${TARGET_PASSWORD}" | skopeo login "${TARGET_REGISTRY}" \
+  local login_output
+  local login_exit_code
+
+  login_output=$(echo "${TARGET_PASSWORD}" | skopeo login "${TARGET_REGISTRY}" \
     -u "${TARGET_USERNAME}" --password-stdin \
-    --tls-verify=true 2>&1; then
+    --tls-verify=true 2>&1) && login_exit_code=0 || login_exit_code=$?
+
+  if [ ${login_exit_code} -eq 0 ]; then
     log "✅ 登录成功"
   else
-    log "❌ 登录失败，请检查 REGISTRY_USERNAME 和 REGISTRY_PASSWORD 配置"
+    log "❌ 登录失败"
+    echo "ERROR_TYPE=login_failed"
+    echo "ERROR_DETAIL=登录目标仓库 ${TARGET_REGISTRY} 失败 (退出码: ${login_exit_code})。错误输出: ${login_output}"
     return 1
   fi
 }
@@ -129,9 +136,14 @@ inspect_source_image() {
 
   # 尝试 inspect 源镜像
   local inspect_output
-  if ! inspect_output=$(skopeo inspect --raw "${source_ref}" 2>&1); then
+  local inspect_exit_code
+
+  inspect_output=$(skopeo inspect --raw "${source_ref}" 2>&1) && inspect_exit_code=0 || inspect_exit_code=$?
+
+  if [ ${inspect_exit_code} -ne 0 ]; then
     log "❌ 源镜像不存在或无法访问: ${source_ref#docker://}"
-    echo "ERROR_DETAIL: ${inspect_output}"
+    echo "ERROR_TYPE=source_image_not_found"
+    echo "ERROR_DETAIL=源镜像 ${source_ref#docker://} 检查失败 (退出码: ${inspect_exit_code})。错误输出: ${inspect_output}"
     return 1
   fi
 
@@ -187,6 +199,10 @@ log() {
 
 # --- 运行命令并带进度心跳 ---
 # 在后台运行命令，每 30 秒打印一次心跳，避免日志长时间无输出被 GitHub Actions 误判卡死
+# 输出保存到全局变量 LAST_CMD_OUTPUT 供错误诊断使用
+LAST_CMD_OUTPUT=""
+LAST_CMD_EXIT_CODE=0
+
 run_with_heartbeat() {
   local cmd="$1"
   local desc="$2"
@@ -214,9 +230,13 @@ run_with_heartbeat() {
   # 等待命令结束并获取退出码
   wait "${cmd_pid}"
   local exit_code=$?
+  LAST_CMD_EXIT_CODE=${exit_code}
 
   end_time=$(date +%s)
   elapsed=$((end_time - start_time))
+
+  # 保存输出到全局变量（截取最后 2000 字符防止过长）
+  LAST_CMD_OUTPUT=$(cat "${tmp_output}" | tail -c 2000)
 
   # 打印完整输出
   echo ""
@@ -266,13 +286,18 @@ sync_image() {
     --dest-tls-verify=true \
     '${source_ref}' '${target_ref}'"
 
+  local sync_all_output=""
+  local sync_all_exit_code=0
+
   if run_with_heartbeat "${copy_cmd}" "同步多架构 manifest list"; then
     log "✅ 多架构 manifest list 同步成功"
     synced_archs="${ARCHITECTURES}"
   else
-    log "⚠️ 多架构 manifest list 同步失败，尝试逐架构同步..."
+    sync_all_exit_code=$?
+    log "⚠️ 多架构 manifest list 同步失败 (退出码: ${sync_all_exit_code})，尝试逐架构同步..."
 
     # 逐架构同步
+    local arch_fail_details=""
     for arch in ${ARCHITECTURES}; do
       echo ""
       log "📦 同步架构: ${arch}"
@@ -286,16 +311,27 @@ sync_image() {
         log "✅ 架构 ${arch} 同步成功"
         synced_archs="${synced_archs} ${arch}"
       else
-        log "⚠️ 架构 ${arch} 同步失败，源镜像可能不支持该架构"
+        local arch_exit_code=$?
+        log "⚠️ 架构 ${arch} 同步失败 (退出码: ${arch_exit_code})"
         failed_archs="${failed_archs} ${arch}"
+        arch_fail_details="${arch_fail_details}架构 ${arch} 退出码: ${arch_exit_code}; "
       fi
     done
+
+    # 保存多架构同步失败的详细信息
+    sync_all_output="manifest list 同步退出码: ${sync_all_exit_code}; 逐架构失败详情: ${arch_fail_details}"
   fi
 
   # 检查是否有任何架构同步成功
   if [ -z "${synced_archs}" ]; then
     log "❌ 所有架构同步失败"
     sync_success=false
+    echo "ERROR_TYPE=sync_failed"
+    echo "ERROR_DETAIL=所有架构同步失败。${sync_all_output}"
+  elif [ -n "${failed_archs}" ]; then
+    log "⚠️ 部分架构同步失败"
+    echo "ERROR_TYPE=partial_sync_failed"
+    echo "ERROR_DETAIL=部分架构同步失败: ${failed_archs}。${sync_all_output}"
   fi
 
   echo ""
@@ -369,13 +405,24 @@ main() {
   echo ""
 
   # 1. 登录目标仓库
-  login_target_registry
+  if ! login_target_registry; then
+    log "❌ 主流程：登录失败，终止同步"
+    echo "SYNC_STATUS=failed"
+    # ERROR_TYPE 和 ERROR_DETAIL 已在 login_target_registry 中输出
+    return 1
+  fi
 
   # 2. 检查源镜像
-  inspect_source_image
+  if ! inspect_source_image; then
+    log "❌ 主流程：源镜像检查失败，终止同步"
+    echo "SYNC_STATUS=failed"
+    # ERROR_TYPE 和 ERROR_DETAIL 已在 inspect_source_image 中输出
+    return 1
+  fi
 
   # 3. 同步镜像
   sync_image
+  # sync_image 内部已处理 ERROR_TYPE/ERROR_DETAIL
 
   # 4. 验证结果
   verify_sync
