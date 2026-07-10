@@ -256,8 +256,9 @@ jobs:
 
           chmod +x scripts/sync-image.sh
 
-          # 运行同步脚本并捕获输出（脚本现在只有8个参数，不再需要 REGISTRY_TYPE）
-          SYNC_OUTPUT=$(bash scripts/sync-image.sh \
+          # 运行同步脚本（直接输出到日志，实时可见）
+          # 关键信息会写入 /tmp/image-sync-result.env，脚本结束后提取
+          bash scripts/sync-image.sh \
             "${{ steps.parse-issue.outputs.image_name }}" \
             "${{ steps.parse-issue.outputs.image_tag }}" \
             "${{ steps.parse-issue.outputs.source_registry }}" \
@@ -265,18 +266,27 @@ jobs:
             "${{ steps.check-config.outputs.registry_namespace }}" \
             "${{ secrets.REGISTRY_USERNAME }}" \
             "${{ secrets.REGISTRY_PASSWORD }}" \
-            "amd64 arm64" 2>&1) || true
+            "amd64 arm64" || true
 
-          echo "${SYNC_OUTPUT}"
-
-          # 提取关键信息
-          SYNC_STATUS=$(echo "${SYNC_OUTPUT}" | grep "^SYNC_STATUS=" | cut -d= -f2 || echo "unknown")
-          SOURCE_IMAGE=$(echo "${SYNC_OUTPUT}" | grep "^SOURCE_IMAGE=" | cut -d= -f2 || echo "")
-          TARGET_IMAGE=$(echo "${SYNC_OUTPUT}" | grep "^TARGET_IMAGE=" | cut -d= -f2 || echo "")
-          AVAILABLE_ARCHS=$(echo "${SYNC_OUTPUT}" | grep "^AVAILABLE_ARCHS=" | cut -d= -f2 || echo "")
-          TARGET_ARCHS=$(echo "${SYNC_OUTPUT}" | grep "^TARGET_ARCHS=" | cut -d= -f2 || echo "")
-          ERROR_TYPE=$(echo "${SYNC_OUTPUT}" | grep "^ERROR_TYPE=" | cut -d= -f2 || echo "")
-          ERROR_DETAIL=$(echo "${SYNC_OUTPUT}" | grep "^ERROR_DETAIL=" | cut -d= -f2- || echo "")
+          # 从结果文件提取关键信息
+          RESULT_FILE="/tmp/image-sync-result.env"
+          if [ -f "${RESULT_FILE}" ]; then
+            SYNC_STATUS=$(grep "^SYNC_STATUS=" "${RESULT_FILE}" | cut -d= -f2 || echo "unknown")
+            SOURCE_IMAGE=$(grep "^SOURCE_IMAGE=" "${RESULT_FILE}" | cut -d= -f2 || echo "")
+            TARGET_IMAGE=$(grep "^TARGET_IMAGE=" "${RESULT_FILE}" | cut -d= -f2 || echo "")
+            AVAILABLE_ARCHS=$(grep "^AVAILABLE_ARCHS=" "${RESULT_FILE}" | cut -d= -f2 || echo "")
+            TARGET_ARCHS=$(grep "^TARGET_ARCHS=" "${RESULT_FILE}" | cut -d= -f2 || echo "")
+            ERROR_TYPE=$(grep "^ERROR_TYPE=" "${RESULT_FILE}" | cut -d= -f2 || echo "")
+            ERROR_DETAIL=$(grep "^ERROR_DETAIL=" "${RESULT_FILE}" | cut -d= -f2- || echo "")
+          else
+            SYNC_STATUS="unknown"
+            SOURCE_IMAGE=""
+            TARGET_IMAGE=""
+            AVAILABLE_ARCHS=""
+            TARGET_ARCHS=""
+            ERROR_TYPE=""
+            ERROR_DETAIL=""
+          fi
 
           echo "sync_status=${SYNC_STATUS}" >> "$GITHUB_OUTPUT"
           echo "source_image=${SOURCE_IMAGE}" >> "$GITHUB_OUTPUT"

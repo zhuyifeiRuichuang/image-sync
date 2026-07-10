@@ -16,6 +16,16 @@ TARGET_USERNAME="${6}"           # 目标仓库用户名
 TARGET_PASSWORD="${7}"           # 目标仓库密码/Token
 ARCHITECTURES="${8:-amd64 arm64}" # 要同步的架构列表
 
+# 结果文件路径（供 workflow 提取关键信息）
+RESULT_FILE="${RESULT_FILE:-/tmp/image-sync-result.env}"
+> "${RESULT_FILE}"
+
+# 输出到 stdout 同时写入结果文件（供 workflow 解析）
+write_result() {
+  echo "$*"
+  echo "$*" >> "${RESULT_FILE}"
+}
+
 # --- 构造源镜像完整引用 ---
 construct_source_ref() {
   local name="${SOURCE_IMAGE_NAME}"
@@ -98,8 +108,8 @@ login_target_registry() {
     log "✅ 登录成功"
   else
     log "❌ 登录失败"
-    echo "ERROR_TYPE=login_failed"
-    echo "ERROR_DETAIL=登录目标仓库 ${TARGET_REGISTRY} 失败 (退出码: ${login_exit_code})。错误输出: ${login_output}"
+    write_result "ERROR_TYPE=login_failed"
+    write_result "ERROR_DETAIL=登录目标仓库 ${TARGET_REGISTRY} 失败 (退出码: ${login_exit_code})。错误输出: ${login_output}"
     return 1
   fi
 }
@@ -119,8 +129,8 @@ inspect_source_image() {
 
   if [ ${inspect_exit_code} -ne 0 ]; then
     log "❌ 源镜像不存在或无法访问: ${source_ref#docker://}"
-    echo "ERROR_TYPE=source_image_not_found"
-    echo "ERROR_DETAIL=源镜像 ${source_ref#docker://} 检查失败 (退出码: ${inspect_exit_code})。错误输出: ${inspect_output}"
+    write_result "ERROR_TYPE=source_image_not_found"
+    write_result "ERROR_DETAIL=源镜像 ${source_ref#docker://} 检查失败 (退出码: ${inspect_exit_code})。错误输出: ${inspect_output}"
     return 1
   fi
 
@@ -166,7 +176,7 @@ print(' '.join(archs))
   fi
 
   log "📋 源镜像可用架构: ${available_archs}"
-  echo "AVAILABLE_ARCHS=${available_archs}"
+  write_result "AVAILABLE_ARCHS=${available_archs}"
 }
 
 # --- 工具函数：打印带时间戳的日志 ---
@@ -323,14 +333,14 @@ sync_image() {
   if [ -z "${synced_archs}" ]; then
     log "❌ 所有架构同步失败"
     sync_success=false
-    echo "ERROR_TYPE=sync_failed"
+    write_result "ERROR_TYPE=sync_failed"
     # 截断过长的错误详情，保留最后 1500 字符
-    echo "ERROR_DETAIL=所有架构同步失败。${sync_all_output}" | tail -c 1500
+    write_result "ERROR_DETAIL=$(echo "所有架构同步失败。${sync_all_output}" | tail -c 1500)"
   elif [ -n "${failed_archs}" ]; then
     log "⚠️ 部分架构同步失败"
     # 截断过长的错误详情，保留最后 1500 字符
-    echo "ERROR_TYPE=partial_sync_failed"
-    echo "ERROR_DETAIL=部分架构同步失败: ${failed_archs}。${sync_all_output}" | tail -c 1500
+    write_result "ERROR_TYPE=partial_sync_failed"
+    write_result "ERROR_DETAIL=$(echo "部分架构同步失败: ${failed_archs}。${sync_all_output}" | tail -c 1500)"
   fi
 
   echo ""
@@ -343,10 +353,10 @@ sync_image() {
     fi
     log "   源镜像: $(get_readable_source)"
     log "   目标镜像: $(get_readable_target)"
-    echo "SYNC_STATUS=success"
+    write_result "SYNC_STATUS=success"
   else
     log "❌ 同步失败"
-    echo "SYNC_STATUS=failed"
+    write_result "SYNC_STATUS=failed"
   fi
   echo "=========================================="
 }
@@ -382,10 +392,10 @@ print(' '.join(archs))
 " 2>/dev/null || echo "unknown")
 
     log "📋 目标镜像架构: ${target_archs}"
-    echo "TARGET_ARCHS=${target_archs}"
+    write_result "TARGET_ARCHS=${target_archs}"
   else
     log "⚠️ 无法验证目标镜像: ${verify_output}"
-    echo "TARGET_ARCHS=unknown"
+    write_result "TARGET_ARCHS=unknown"
   fi
 }
 
@@ -405,14 +415,14 @@ main() {
   # 1. 登录目标仓库
   if ! login_target_registry; then
     log "❌ 主流程：登录失败，终止同步"
-    echo "SYNC_STATUS=failed"
+    write_result "SYNC_STATUS=failed"
     return 1
   fi
 
   # 2. 检查源镜像
   if ! inspect_source_image; then
     log "❌ 主流程：源镜像检查失败，终止同步"
-    echo "SYNC_STATUS=failed"
+    write_result "SYNC_STATUS=failed"
     return 1
   fi
 
@@ -424,8 +434,8 @@ main() {
 
   log ""
   log "✅ 同步流程完成"
-  echo "SOURCE_IMAGE=$(get_readable_source)"
-  echo "TARGET_IMAGE=$(get_readable_target)"
+  write_result "SOURCE_IMAGE=$(get_readable_source)"
+  write_result "TARGET_IMAGE=$(get_readable_target)"
 }
 
 main
