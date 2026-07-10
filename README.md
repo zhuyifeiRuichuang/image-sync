@@ -255,6 +255,16 @@ Issue 评论显示 `❌ 源镜像不存在或无法访问`：
 - 在 Actions 日志中可以看到 `Copying blob ...` 的实时进度
 - 如果频繁超时，考虑同步更小的镜像或使用更近的源仓库
 
+### 同步日志中出现 `unknown` 架构？
+
+这是**正常现象**，不是同步失败。
+
+现代镜像（尤其是使用 Docker Buildx 构建的镜像）会在 manifest list 中附带 **attestation manifests**（构建证明书元数据）。这些元数据 manifest 的 platform 被标记为 `unknown/unknown`。
+
+脚本已经会自动过滤这些 `unknown/unknown` 的 attestation manifests，只在日志和 Issue 评论中显示真正的架构（如 `amd64`、`arm64`、`arm`、`ppc64le` 等）。
+
+**无需处理，多架构同步是完整的。**
+
 ### 密码是否会在日志中泄露？
 
 不会。GitHub Actions 会自动将所有与已注册 Secrets 完全匹配的字符串在日志中替换为 `***`。脚本从不主动打印密码值。
@@ -282,8 +292,9 @@ image-sync/
 4. **仓库地址必填**：`REGISTRY_URL` 是必填项，填写 `docker login` 时使用的地址
 5. **密码类型**：各云平台 REGISTRY_PASSWORD 是 `docker login` 的密码，**不是** API 的 AK/SK
 6. **架构限制**：如果源镜像不支持某个架构（如只有 amd64），该架构会跳过并在反馈中标注
-7. **私有源镜像**：当前仅支持同步公有源镜像，私有源镜像需要额外配置源仓库认证
-8. **镜像地址**：Issue 中必须填写完整的镜像地址（包含仓库地址），不能只写镜像路径
+7. **`unknown` 架构**：日志中的 `unknown/unknown` 是 Docker Buildx 的 attestation 元数据，会被自动过滤，不影响同步
+8. **私有源镜像**：当前仅支持同步公有源镜像，私有源镜像需要额外配置源仓库认证
+9. **镜像地址**：Issue 中必须填写完整的镜像地址（包含仓库地址），不能只写镜像路径
 
 ## 📜 License
 

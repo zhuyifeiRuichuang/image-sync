@@ -26,6 +26,14 @@ write_result() {
   echo "$*" >> "${RESULT_FILE}"
 }
 
+# 从结果文件读取指定 key 的值
+read_result() {
+  local key="${1}"
+  if [ -f "${RESULT_FILE}" ]; then
+    grep "^${key}=" "${RESULT_FILE}" | cut -d= -f2- | tail -n1
+  fi
+}
+
 # --- 构造源镜像完整引用 ---
 construct_source_ref() {
   local name="${SOURCE_IMAGE_NAME}"
@@ -136,24 +144,10 @@ inspect_source_image() {
 
   log "✅ 源镜像存在"
 
-  # 解析架构信息
+  # 解析架构信息（过滤 Docker Buildx attestation manifests 的 unknown/unknown）
   local available_archs=""
   # 检查是否是 manifest list (多架构)
-  if echo "${inspect_output}" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-if 'manifests' in data:
-    for m in data['manifests']:
-        plat = m.get('platform', {})
-        arch = plat.get('architecture', '')
-        if arch:
-            print(arch)
-else:
-    arch = data.get('architecture', '')
-    if arch:
-        print(arch)
-" 2>/dev/null; then
-    available_archs=$(echo "${inspect_output}" | python3 -c "
+  available_archs=$(echo "${inspect_output}" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 archs = []
@@ -161,15 +155,25 @@ if 'manifests' in data:
     for m in data['manifests']:
         plat = m.get('platform', {})
         arch = plat.get('architecture', '')
+        os = plat.get('os', '')
+        # 过滤 Docker Buildx attestation manifests (platform: unknown/unknown)
+        if arch == 'unknown' and os == 'unknown':
+            continue
         if arch:
             archs.append(arch)
 else:
     arch = data.get('architecture', '')
     if arch:
         archs.append(arch)
-print(' '.join(archs))
-" 2>/dev/null)
-  fi
+# 去重并保持顺序
+seen = set()
+ordered_archs = []
+for a in archs:
+    if a not in seen:
+        seen.add(a)
+        ordered_archs.append(a)
+print(' '.join(ordered_archs))
+" 2>/dev/null || echo "unknown")
 
   if [ -z "${available_archs}" ]; then
     available_archs="unknown"
@@ -297,7 +301,11 @@ sync_image() {
 
   if run_with_heartbeat "${copy_cmd}" "同步多架构 manifest list"; then
     log "✅ 多架构 manifest list 同步成功"
-    synced_archs="${ARCHITECTURES}"
+    # --all 同步了整个 manifest list，包含源镜像支持的所有架构
+    synced_archs=$(read_result "AVAILABLE_ARCHS")
+    if [ -z "${synced_archs}" ] || [ "${synced_archs}" = "unknown" ]; then
+      synced_archs="${ARCHITECTURES}"
+    fi
   else
     sync_all_exit_code=$?
     sync_all_detail="${LAST_CMD_OUTPUT}"
@@ -372,7 +380,7 @@ verify_sync() {
   if verify_output=$(skopeo inspect --raw "${target_ref}" 2>&1); then
     log "✅ 目标镜像验证成功"
 
-    # 解析已同步的架构
+    # 解析已同步的架构（过滤 Docker Buildx attestation manifests 的 unknown/unknown）
     local target_archs=""
     target_archs=$(echo "${verify_output}" | python3 -c "
 import sys, json
@@ -382,16 +390,28 @@ if 'manifests' in data:
     for m in data['manifests']:
         plat = m.get('platform', {})
         arch = plat.get('architecture', '')
+        os = plat.get('os', '')
+        # 过滤 Docker Buildx attestation manifests (platform: unknown/unknown)
+        if arch == 'unknown' and os == 'unknown':
+            continue
         if arch:
             archs.append(arch)
 else:
     arch = data.get('architecture', '')
     if arch:
         archs.append(arch)
-print(' '.join(archs))
+# 去重并保持顺序
+seen = set()
+ordered_archs = []
+for a in archs:
+    if a not in seen:
+        seen.add(a)
+        ordered_archs.append(a)
+print(' '.join(ordered_archs))
 " 2>/dev/null || echo "unknown")
 
     log "📋 目标镜像架构: ${target_archs}"
+    log "💡 已过滤 Docker Buildx attestation manifests (unknown/unknown)"
     write_result "TARGET_ARCHS=${target_archs}"
   else
     log "⚠️ 无法验证目标镜像: ${verify_output}"
