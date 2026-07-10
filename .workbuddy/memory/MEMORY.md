@@ -33,3 +33,4 @@
 ## Issue 触发机制
 - 仅通过 `labeled` 事件触发 (避免 opened+labeled 重复运行)
 - concurrency group 按 issue number 去重
+- 增加 Issue 状态检查：只有 open 状态的 Issue 才触发同步 (`github.event.issue.state == 'open')
