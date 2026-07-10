@@ -4,6 +4,11 @@ on:
   issues:
     types: [opened, labeled]
 
+# 同一 Issue 的并发运行自动取消，避免 opened + labeled 同时触发导致重复执行
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
 permissions:
   issues: write
   packages: write
@@ -37,80 +42,66 @@ jobs:
           echo "📝 解析 Issue 内容"
           echo "=========================================="
 
-          # 从 Issue body 中提取镜像名称
-          IMAGE_NAME=$(echo "${ISSUE_BODY}" | \
-            sed -n '/### 镜像名称/,/###/p' | \
+          # 从 Issue body 中提取完整的镜像地址
+          FULL_REF=$(echo "${ISSUE_BODY}" | \
+            sed -n '/### 镜像完整地址/,/###/p' | \
             grep -v '###' | \
             sed '/^$/d' | \
             head -n1 | \
             xargs)
 
-          # 从 Issue body 中提取镜像 Tag
-          IMAGE_TAG=$(echo "${ISSUE_BODY}" | \
-            sed -n '/### 镜像 Tag/,/###/p' | \
-            grep -v '###' | \
-            sed '/^$/d' | \
-            head -n1 | \
-            xargs)
+          echo "原始输入: ${FULL_REF}"
 
-          # 从 Issue body 中提取源仓库
-          SOURCE_REGISTRY=$(echo "${ISSUE_BODY}" | \
-            sed -n '/### 源镜像仓库/,/###/p' | \
-            grep -v '###' | \
-            sed '/^$/d' | \
-            head -n1 | \
-            xargs)
+          # 解析完整镜像地址：registry/image/path:tag
+          # 示例：docker.io/apache/seatunnel:2.3.13
+          #       registry.cn-hangzhou.aliyuncs.com/namespace/mysql:8.4.10
 
-          # 默认值处理
-          if [ -z "${IMAGE_TAG}" ]; then
-            IMAGE_TAG="latest"
-          fi
-          if [ -z "${SOURCE_REGISTRY}" ] || [ "${SOURCE_REGISTRY}" = "_No response_" ]; then
-            SOURCE_REGISTRY="docker.io"
-          fi
+          PARSE_ERROR="false"
 
-          # 处理下拉选项，提取仓库地址
-          case "${SOURCE_REGISTRY}" in
-            *"docker.io"*|*"Docker Hub"*)
+          if [ -z "${FULL_REF}" ]; then
+            echo "❌ 无法从 Issue 中解析出镜像地址"
+            PARSE_ERROR="true"
+          else
+            # 1. 提取 Tag（最后一个冒号后的内容）
+            if echo "${FULL_REF}" | grep -q ':'; then
+              IMAGE_TAG=$(echo "${FULL_REF}" | rev | cut -d':' -f1 | rev)
+              IMAGE_REF_NO_TAG=$(echo "${FULL_REF}" | sed 's/:[^:]*$//')
+            else
+              IMAGE_TAG="latest"
+              IMAGE_REF_NO_TAG="${FULL_REF}"
+            fi
+
+            # 2. 提取 Registry 和 Image Name（按第一个 / 分割）
+            if echo "${IMAGE_REF_NO_TAG}" | grep -q '/'; then
+              SOURCE_REGISTRY=$(echo "${IMAGE_REF_NO_TAG}" | cut -d'/' -f1)
+              IMAGE_NAME=$(echo "${IMAGE_REF_NO_TAG}" | cut -d'/' -f2-)
+            else
+              # 用户只填写了镜像名，没有仓库地址，默认用 docker.io
               SOURCE_REGISTRY="docker.io"
-              ;;
-            *"quay.io"*)
-              SOURCE_REGISTRY="quay.io"
-              ;;
-            *"gcr.io"*)
-              SOURCE_REGISTRY="gcr.io"
-              ;;
-            *"k8s.gcr.io"*)
-              SOURCE_REGISTRY="k8s.gcr.io"
-              ;;
-            *"registry.k8s.io"*)
-              SOURCE_REGISTRY="registry.k8s.io"
-              ;;
-            *"ghcr.io"*)
-              SOURCE_REGISTRY="ghcr.io"
-              ;;
-            *"其他"*)
-              # 用户选择"其他"，镜像名称中应已包含完整仓库地址
-              # 保留 docker.io 作为兜底，脚本会自动检测镜像名中的仓库地址
-              SOURCE_REGISTRY="docker.io"
-              ;;
-          esac
+              IMAGE_NAME="${IMAGE_REF_NO_TAG}"
+            fi
+
+            # 3. 校验必须包含仓库地址（根据用户要求：必须填写完整镜像名字）
+            # 简单判断：如果 registry 部分不包含 . 或 :，认为不是完整仓库地址
+            if ! echo "${SOURCE_REGISTRY}" | grep -qE '\.|:|localhost'; then
+              echo "❌ 镜像地址不完整，缺少仓库地址。请填写如 docker.io/apache/seatunnel:2.3.13 的完整地址"
+              PARSE_ERROR="true"
+            fi
+          fi
 
           echo "解析结果:"
-          echo "  镜像名称: ${IMAGE_NAME}"
-          echo "  镜像Tag: ${IMAGE_TAG}"
-          echo "  源仓库: ${SOURCE_REGISTRY}"
+          echo "  镜像名称: ${IMAGE_NAME:-未解析}"
+          echo "  镜像Tag: ${IMAGE_TAG:-未解析}"
+          echo "  源仓库: ${SOURCE_REGISTRY:-未解析}"
 
           # 输出到 GitHub Actions 环境变量
           echo "image_name=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
           echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
           echo "source_registry=${SOURCE_REGISTRY}" >> "$GITHUB_OUTPUT"
+          echo "parse_error=${PARSE_ERROR}" >> "$GITHUB_OUTPUT"
 
-          if [ -z "${IMAGE_NAME}" ]; then
-            echo "❌ 无法从 Issue 中解析出镜像名称"
-            echo "parse_error=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "parse_error=false" >> "$GITHUB_OUTPUT"
+          if [ "${PARSE_ERROR}" = "true" ]; then
+            exit 1
           fi
 
       # ============================================
@@ -254,8 +245,17 @@ jobs:
             let commentBody = '';
 
             if (parseError === 'true') {
-              commentBody = `## ❌ 无法解析镜像信息\n\n` +
-                `无法从 Issue 中解析出镜像名称。请确认 Issue 使用了正确的模板格式。\n\n` +
+              commentBody = `## ❌ 无法解析镜像地址\n\n` +
+                `无法从 Issue 中解析出有效的完整镜像地址。\n\n` +
+                `### 请使用以下格式填写\n\n` +
+                `\`\`\`\n` +
+                `docker.io/apache/seatunnel:2.3.13\n` +
+                `docker.io/library/mysql:8.4.10\n` +
+                `docker.io/nginxinc/nginx:latest\n` +
+                `quay.io/prometheus/node-exporter:latest\n` +
+                `ghcr.io/owner/repo:tag\n` +
+                `\`\`\`\n\n` +
+                `注意：必须包含完整的仓库地址（如 \`docker.io/\`），不能只写镜像路径。\n\n` +
                 `---\n*由 [image-sync](https://github.com/${context.repo.owner}/${context.repo.repo}) Action 自动反馈*`;
             } else if (configOk !== 'true') {
               commentBody = `## ❌ 未配置目标容器镜像仓库\n\n` +
@@ -456,13 +456,13 @@ jobs:
                 `   \`\`\``;
             } else if (errorType === 'source_image_not_found') {
               errorTitle = '❌ 源镜像不存在或无法访问';
-              errorExplanation = `指定的源镜像 **${imageName}:${imageTag}** 在源仓库中不存在，或为私有镜像需要认证。`;
+              errorExplanation = `指定的源镜像 **${sourceImage || imageName + ':' + imageTag}** 在源仓库中不存在，或为私有镜像需要认证。`;
               suggestions =
-                `1. 确认镜像名称和 Tag 是否拼写正确\n` +
+                `1. 确认镜像完整地址是否拼写正确（例如：\`docker.io/apache/seatunnel:2.3.13\`）\n` +
                 `2. 如果源镜像为私有镜像，当前不支持私有源镜像同步\n` +
                 `3. 在本地验证源镜像是否存在：\n` +
                 `   \`\`\`bash\n` +
-                `   skopeo inspect --raw docker://${imageName}:${imageTag}\n` +
+                `   skopeo inspect --raw docker://${sourceImage || imageName + ':' + imageTag}\n` +
                 `   \`\`\``;
             } else if (errorType === 'sync_failed') {
               errorTitle = '❌ 镜像同步失败';
