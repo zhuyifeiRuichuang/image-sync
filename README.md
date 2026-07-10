@@ -400,6 +400,10 @@ image-sync/
 7. **架构自动同步** — `skopeo copy --all` 会同步源镜像支持的所有架构，不限于 amd64 和 arm64
 8. **`unknown/unknown` 已过滤** — 日志中不再出现 Docker Buildx attestation manifests 的 `unknown/unknown` 架构
 
+## 👨‍💻 开发者信息
+
+本项目使用 [WorkBuddy](https://www.codebuddy.cn/) 搭配 **GLM-5.1** 和 **Kimi-K2.7** 模型，全流程 AI 开发完成——从项目架构设计、代码编写、问题调试到文档撰写，均由 AI 主导执行。
+
 ## 📜 License
 
 MIT License
