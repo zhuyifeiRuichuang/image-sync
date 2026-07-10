@@ -53,15 +53,40 @@
 
 #### 各平台仓库地址参考
 
-| 平台 | 仓库地址示例 |
+| 平台 | REGISTRY_URL | REGISTRY_NAMESPACE | REGISTRY_USERNAME | REGISTRY_PASSWORD |
+|------|-------------|--------------------|--------------------|-------------------|
+| **腾讯云** | `ccr.ccs.tencentyun.com` | 你的命名空间（如 `ruichuangdev`） | TCR 用户名 | TCR **固定密码**（⚠️ 不是临时登录密码） |
+| **华为云** | `swr.cn-north-4.myhuaweicloud.com` | 你的组织名（如 `myorg`） | SWR 用户名 | SWR **长期登录密码**（⚠️ 不是 AK/SK） |
+| **阿里云** | `registry.cn-hangzhou.aliyuncs.com` | 你的命名空间（如 `mynamespace`） | ACR 用户名 | ACR **固定密码**（⚠️ 不是主账号 AK/SK） |
+| **Docker Hub** | `docker.io` | 你的 Docker Hub 用户名 | Docker Hub 用户名 | **Access Token**（Account Settings → Security → New Access Token） |
+| **GHCR** | `ghcr.io` | GitHub 用户名或组织名 | GitHub 用户名 | **Fine-grained PAT**（需 Packages: Read and write 权限） |
+| **Quay** | `quay.io` | Quay 组织名 | Quay 用户名 | **Robot Account Token**（Organization → Robot Accounts → Create） |
+| **私有仓库** | 自定义域名（如 `registry.company.com`） | 项目名 | 仓库用户名 | 仓库密码 |
+
+> ⚠️ **密码说明**：REGISTRY_PASSWORD 是 `docker login` 时输入的密码。各云平台的 AK/SK **不能**直接用于 docker login，需要使用固定密码或 Token。
+
+#### 华为云各区域 REGISTRY_URL
+
+| 区域 | REGISTRY_URL |
 |------|-------------|
-| 腾讯云 | `ccr.ccs.tencentyun.com` |
-| 华为云（华北-北京四） | `swr.cn-north-4.myhuaweicloud.com` |
-| 阿里云（华东1-杭州） | `registry.cn-hangzhou.aliyuncs.com` |
-| Docker Hub | `docker.io` |
-| GHCR | `ghcr.io` |
-| Quay | `quay.io` |
-| 私有仓库 | 自定义地址 |
+| 华北-北京四 | `swr.cn-north-4.myhuaweicloud.com` |
+| 华北-北京一 | `swr.cn-north-1.myhuaweicloud.com` |
+| 华东-上海二 | `swr.cn-east-2.myhuaweicloud.com` |
+| 华南-广州 | `swr.cn-south-1.myhuaweicloud.com` |
+| 东北-大连 | `swr.cn-northeast-1.myhuaweicloud.com` |
+
+#### 阿里云各区域 REGISTRY_URL
+
+| 区域 | REGISTRY_URL |
+|------|-------------|
+| 华东1-杭州 | `registry.cn-hangzhou.aliyuncs.com` |
+| 华东2-上海 | `registry.cn-shanghai.aliyuncs.com` |
+| 华北1-青岛 | `registry.cn-qingdao.aliyuncs.com` |
+| 华北2-北京 | `registry.cn-beijing.aliyuncs.com` |
+| 华南1-深圳 | `registry.cn-shenzhen.aliyuncs.com` |
+| 华南3-广州 | `registry.cn-guangzhou.aliyuncs.com` |
+| 中国香港 | `registry.cn-hongkong.aliyuncs.com` |
+| 美国-弗吉尼亚 | `registry.us-east-1.aliyuncs.com` |
 
 ### 3. 提交 Issue 同步镜像
 
@@ -159,30 +184,7 @@ GitHub Actions 触发 (labeled 事件)
 5. **私有源镜像**：当前仅支持同步公有源镜像，私有源镜像需要额外配置源仓库认证
 6. **镜像地址**：Issue 中必须填写完整的镜像地址（包含仓库地址），不能只写镜像路径
 
-## 🌍 华为云/阿里云各区域仓库地址
-
-### 华为云 SWR 区域地址
-
-| 区域 | 仓库地址 |
-|------|----------|
-| 华北-北京四 | `swr.cn-north-4.myhuaweicloud.com` |
-| 华北-北京一 | `swr.cn-north-1.myhuaweicloud.com` |
-| 华东-上海二 | `swr.cn-east-2.myhuaweicloud.com` |
-| 华南-广州 | `swr.cn-south-1.myhuaweicloud.com` |
-| 东北-大连 | `swr.cn-northeast-1.myhuaweicloud.com` |
-
-### 阿里云 ACR 区域地址
-
-| 区域 | 仓库地址 |
-|------|----------|
-| 华东1-杭州 | `registry.cn-hangzhou.aliyuncs.com` |
-| 华东2-上海 | `registry.cn-shanghai.aliyuncs.com` |
-| 华北1-青岛 | `registry.cn-qingdao.aliyuncs.com` |
-| 华北2-北京 | `registry.cn-beijing.aliyuncs.com` |
-| 华南1-深圳 | `registry.cn-shenzhen.aliyuncs.com` |
-| 华南3-广州 | `registry.cn-guangzhou.aliyuncs.com` |
-| 中国香港 | `registry.cn-hongkong.aliyuncs.com` |
-| 美国-弗吉尼亚 | `registry.us-east-1.aliyuncs.com` |
+7. **密码类型**：各云平台 REGISTRY_PASSWORD 是 `docker login` 的密码，**不是** API 的 AK/SK
 
 ## 📜 License
 
