@@ -20,8 +20,9 @@ permissions:
 
 jobs:
   sync-image:
-    # 仅处理新增标签为 image-sync 的事件
-    if: github.event.label.name == 'image-sync'
+    # 仅处理新增标签为 image-sync 的、且处于 open 状态的 Issue
+    # 避免 closed Issue 被误操作添加标签后重复触发同步
+    if: github.event.label.name == 'image-sync' && github.event.issue.state == 'open'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
