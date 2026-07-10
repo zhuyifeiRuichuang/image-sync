@@ -2,9 +2,13 @@ name: 🔄 容器镜像同步
 
 on:
   issues:
-    types: [opened, labeled]
+    # 仅通过 labeled 事件触发。
+    # Issue 模板会自动附加 image-sync 标签，因此创建 Issue 时会触发 labeled 事件。
+    # 后续手动添加 image-sync 标签也能触发。
+    # 避免 opened + labeled 同时触发导致重复运行。
+    types: [labeled]
 
-# 同一 Issue 的并发运行自动取消，避免 opened + labeled 同时触发导致重复执行
+# 同一 Issue 的并发运行自动取消，避免重复触发
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.issue.number }}
   cancel-in-progress: true
@@ -15,11 +19,9 @@ permissions:
 
 jobs:
   sync-image:
-    # 仅处理带有 image-sync 标签的 Issue
-    # 对于 labeled 事件，只有新增的标签是 image-sync 时才执行
-    if: |
-      contains(github.event.issue.labels.*.name, 'image-sync') &&
-      (github.event.action == 'opened' || github.event.label.name == 'image-sync')
+    # 仅处理新增标签为 image-sync 的事件
+    # 模板创建 Issue 时已自动附加 image-sync 标签，会触发本工作流
+    if: github.event.label.name == 'image-sync'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
