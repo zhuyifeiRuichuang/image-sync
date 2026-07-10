@@ -305,6 +305,13 @@ jobs:
           echo "✅ skopeo 安装完成"
           skopeo --version
 
+          # 新版 skopeo 要求 v2 格式的 registries.conf
+          # ubuntu runner 默认是 v1 格式，需要创建兼容的 v2 配置
+          echo "📦 创建 v2 格式 registries.conf..."
+          sudo mkdir -p /etc/containers
+          echo 'unqualified-search-registries = ["docker.io"]' | sudo tee /etc/containers/registries.conf
+          echo "✅ registries.conf 配置完成"
+
       # ============================================
       # 步骤5：同步镜像
       # ============================================
