@@ -293,14 +293,15 @@ jobs:
             });
 
       # ============================================
-      # 步骤4：安装 skopeo
+      # 步骤4：安装 skopeo（下载最新版 binary）
       # ============================================
       - name: 📦 安装 skopeo
         if: steps.check-config.outputs.config_ok == 'true' && steps.parse-issue.outputs.parse_error != 'true'
         run: |
-          echo "📦 安装 skopeo 工具..."
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq skopeo
+          echo "📦 下载最新版 skopeo binary..."
+          SKOPEO_VERSION="v1.23.0"
+          curl -sL "https://github.com/lework/skopeo-binary/releases/download/${SKOPEO_VERSION}/skopeo-linux-amd64" -o /usr/local/bin/skopeo
+          chmod +x /usr/local/bin/skopeo
           echo "✅ skopeo 安装完成"
           skopeo --version
 

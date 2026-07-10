@@ -281,7 +281,7 @@ sync_image() {
   log "📦 尝试同步多架构 manifest list..."
 
   local copy_cmd
-  copy_cmd="skopeo copy --all --retry-times 3 \
+  copy_cmd="skopeo copy --all --verbose --retry-times 3 \
     --src-tls-verify=true \
     --dest-tls-verify=true \
     '${source_ref}' '${target_ref}'"
@@ -304,7 +304,7 @@ sync_image() {
       echo ""
       log "📦 同步架构: ${arch}"
 
-      copy_cmd="skopeo copy --override-arch '${arch}' --retry-times 3 \
+      copy_cmd="skopeo copy --override-arch '${arch}' --verbose --retry-times 3 \
         --src-tls-verify=true \
         --dest-tls-verify=true \
         '${source_ref}' '${target_ref}'"
