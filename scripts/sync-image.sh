@@ -288,12 +288,14 @@ sync_image() {
 
   local sync_all_output=""
   local sync_all_exit_code=0
+  local sync_all_detail=""
 
   if run_with_heartbeat "${copy_cmd}" "同步多架构 manifest list"; then
     log "✅ 多架构 manifest list 同步成功"
     synced_archs="${ARCHITECTURES}"
   else
     sync_all_exit_code=$?
+    sync_all_detail="${LAST_CMD_OUTPUT}"
     log "⚠️ 多架构 manifest list 同步失败 (退出码: ${sync_all_exit_code})，尝试逐架构同步..."
 
     # 逐架构同步
@@ -314,12 +316,12 @@ sync_image() {
         local arch_exit_code=$?
         log "⚠️ 架构 ${arch} 同步失败 (退出码: ${arch_exit_code})"
         failed_archs="${failed_archs} ${arch}"
-        arch_fail_details="${arch_fail_details}架构 ${arch} 退出码: ${arch_exit_code}; "
+        arch_fail_details="${arch_fail_details}架构 ${arch} 退出码: ${arch_exit_code}; 错误输出: ${LAST_CMD_OUTPUT}; "
       fi
     done
 
     # 保存多架构同步失败的详细信息
-    sync_all_output="manifest list 同步退出码: ${sync_all_exit_code}; 逐架构失败详情: ${arch_fail_details}"
+    sync_all_output="manifest list 同步退出码: ${sync_all_exit_code}; 详细输出: ${sync_all_detail}; 逐架构失败详情: ${arch_fail_details}"
   fi
 
   # 检查是否有任何架构同步成功
@@ -327,11 +329,13 @@ sync_image() {
     log "❌ 所有架构同步失败"
     sync_success=false
     echo "ERROR_TYPE=sync_failed"
-    echo "ERROR_DETAIL=所有架构同步失败。${sync_all_output}"
+    # 截断过长的错误详情，保留最后 1500 字符
+    echo "ERROR_DETAIL=所有架构同步失败。${sync_all_output}" | tail -c 1500
   elif [ -n "${failed_archs}" ]; then
     log "⚠️ 部分架构同步失败"
+    # 截断过长的错误详情，保留最后 1500 字符
     echo "ERROR_TYPE=partial_sync_failed"
-    echo "ERROR_DETAIL=部分架构同步失败: ${failed_archs}。${sync_all_output}"
+    echo "ERROR_DETAIL=部分架构同步失败: ${failed_archs}。${sync_all_output}" | tail -c 1500
   fi
 
   echo ""
