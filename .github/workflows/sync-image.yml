@@ -14,8 +14,9 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  issues: write
-  packages: write
+  contents: read    # actions/checkout 需要读取仓库内容
+  issues: write     # 创建评论、关闭 Issue、修改标签
+  packages: write   # 推送到 GHCR 时需要
 
 jobs:
   sync-image:
@@ -100,7 +101,7 @@ jobs:
           echo "parse_error=${PARSE_ERROR}" >> "$GITHUB_OUTPUT"
 
           if [ "${PARSE_ERROR}" = "true" ]; then
-            exit 1
+            echo "❌ 镜像地址解析失败，将在下一步向 Issue 反馈"
           fi
 
       # ============================================
